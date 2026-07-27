@@ -78,4 +78,27 @@ class SakhrAnalyzerTest {
         val diagsUnused = analyzer.analyze(sourceUnused)
         assertTrue(diagsUnused.none { it.severity == Severity.Warning }, "Should have no warnings for parameters")
     }
+
+    @Test
+    fun testImplicitAndExplicitTypes() {
+        val source = """
+            ليكن س = 5
+            أكتب(س)
+            ألزم ص: رقم = 10
+            أكتب(ص)
+            إجراء دالة(أ) ابدأ
+                أكتب(أ)
+                رجع أ
+            انتهى
+        """.trimIndent()
+        val diags = analyzer.analyze(source)
+        
+        // Filter for Information to be safe
+        val infoDiags = diags.filter { it.severity == Severity.Information }
+        
+        // "س" should have an implicit type information
+        assertTrue(infoDiags.any { it.message.contains("نوع ضمني") }, "Should have implicit type info")
+        // "ص" should have an explicit type information
+        assertTrue(infoDiags.any { it.message.contains("نوع صريح") }, "Should have explicit type info")
+    }
 }

@@ -69,8 +69,8 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                 val receiverType = stmt.receiverType?.let { SakhrType.fromLexeme(it.lexeme) }
                 val sig = FunctionSignature(
                     stmt.name.lexeme,
-                    stmt.params.map { SakhrType.fromLexeme(it.type.lexeme) },
-                    SakhrType.fromLexeme(stmt.returnType.lexeme),
+                    stmt.params.map { it.type?.let { t -> SakhrType.fromLexeme(t.lexeme) } ?: SakhrType.UNKNOWN },
+                    stmt.returnType?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.VOID,
                     kind,
                     receiverType
                 )
@@ -103,8 +103,8 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     stmt.name.lexeme
                 }
                 
-                val params = stmt.params.map { SakhrType.fromLexeme(it.type.lexeme) }
-                val returnType = SakhrType.fromLexeme(stmt.returnType.lexeme)
+                val params = stmt.params.map { it.type?.let { t -> SakhrType.fromLexeme(t.lexeme) } ?: SakhrType.UNKNOWN }
+                val returnType = stmt.returnType?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.VOID
                 val sig = functions[key]?.find { it.params == params && it.returnType == returnType }
                     ?: return
 
@@ -121,6 +121,18 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     val paramType = sig.params[i]
                     declare(param.name, paramType, isConstant = true, isParameter = true) // Parameters are val by default
                     define(param.name)
+                    
+                    if (param.type == null && paramType != SakhrType.UNKNOWN) {
+                         diagnostics.reportInformation("الوسيط '${param.name.lexeme}' لديه نوع ضمني '${paramType.lexeme}'.", param.name.location, param.name.lexeme.length, listOf(QuickFix("استخدام نوع صريح: ${paramType.lexeme}", "ADD_TYPE:${paramType.lexeme}")))
+                    } else if (param.type != null) {
+                         diagnostics.reportInformation("الوسيط '${param.name.lexeme}' لديه نوع صريح.", param.name.location, param.name.lexeme.length, listOf(QuickFix("إزالة النوع الصريح", "REMOVE_TYPE")))
+                    }
+                }
+                
+                if (stmt.returnType == null && sig.returnType != SakhrType.VOID) {
+                     diagnostics.reportInformation("الدالة '${stmt.name.lexeme}' لديها نوع إرجاع ضمني '${sig.returnType.lexeme}'.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("استخدام نوع صريح: ${sig.returnType.lexeme}", "ADD_RETURN_TYPE:${sig.returnType.lexeme}")))
+                } else if (stmt.returnType != null) {
+                     diagnostics.reportInformation("الدالة '${stmt.name.lexeme}' لديها نوع إرجاع صريح.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("إزالة نوع الإرجاع الصريح", "REMOVE_RETURN_TYPE")))
                 }
 
                 stmt.body.forEach { checkStmt(it) }
@@ -148,13 +160,45 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
             }
             is Stmt.Let -> {
                 val initType = stmt.initializer?.let { checkExpr(it) } ?: SakhrType.UNKNOWN
-                declare(stmt.name, initType, isConstant = false)
+                val declaredType = stmt.type?.let { SakhrType.fromLexeme(it.lexeme) }
+                val finalType = declaredType ?: initType
+                
+                if (declaredType != null && initType != SakhrType.UNKNOWN && !isAssignable(declaredType, initType)) {
+                    diagnostics.reportError(
+                        "النوع المصرح به '${declaredType.lexeme}' لا يتطابق مع نوع القيمة '${initType.lexeme}'.",
+                        stmt.name.location
+                    )
+                }
+                
+                declare(stmt.name, finalType, isConstant = false)
                 define(stmt.name)
+                
+                if (stmt.type == null && finalType != SakhrType.UNKNOWN) {
+                    diagnostics.reportInformation("المتغير '${stmt.name.lexeme}' لديه نوع ضمني '${finalType.lexeme}'.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("استخدام نوع صريح: ${finalType.lexeme}", "ADD_TYPE:${finalType.lexeme}")))
+                } else if (stmt.type != null) {
+                    diagnostics.reportInformation("المتغير '${stmt.name.lexeme}' لديه نوع صريح.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("إزالة النوع الصريح", "REMOVE_TYPE")))
+                }
             }
             is Stmt.Const -> {
                 val initType = checkExpr(stmt.initializer)
-                declare(stmt.name, initType, isConstant = true)
+                val declaredType = stmt.type?.let { SakhrType.fromLexeme(it.lexeme) }
+                val finalType = declaredType ?: initType
+
+                if (declaredType != null && initType != SakhrType.UNKNOWN && !isAssignable(declaredType, initType)) {
+                    diagnostics.reportError(
+                        "النوع المصرح به '${declaredType.lexeme}' لا يتطابق مع نوع القيمة '${initType.lexeme}'.",
+                        stmt.name.location
+                    )
+                }
+
+                declare(stmt.name, finalType, isConstant = true)
                 define(stmt.name)
+
+                if (stmt.type == null && finalType != SakhrType.UNKNOWN) {
+                    diagnostics.reportInformation("الثابت '${stmt.name.lexeme}' لديه نوع ضمني '${finalType.lexeme}'.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("استخدام نوع صريح: ${finalType.lexeme}", "ADD_TYPE:${finalType.lexeme}")))
+                } else if (stmt.type != null) {
+                    diagnostics.reportInformation("الثابت '${stmt.name.lexeme}' لديه نوع صريح.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("إزالة النوع الصريح", "REMOVE_TYPE")))
+                }
             }
             is Stmt.Return -> {
                 if (currentFunction == null) {

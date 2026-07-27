@@ -15,6 +15,10 @@ class DiagnosticCollector {
     fun reportWarning(message: String, location: Location, length: Int = 1, fixes: List<QuickFix> = emptyList()) {
         report(message, location, Severity.Warning, length, fixes)
     }
+
+    fun reportInformation(message: String, location: Location, length: Int = 1, fixes: List<QuickFix> = emptyList()) {
+        report(message, location, Severity.Information, length, fixes)
+    }
     
     fun clear() {
         _diagnostics.clear()

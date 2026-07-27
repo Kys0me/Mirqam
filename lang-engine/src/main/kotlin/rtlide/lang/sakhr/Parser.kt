@@ -47,12 +47,13 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         if (!check(TokenType.RIGHT_PAREN)) {
             do {
                 val paramName = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للوسيط.")
-                consume(TokenType.COLON, "يُتوقع وجود ':' بعد اسم الوسيط لتحديد نوعه.")
-                
-                var paramType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع للوسيط.")
-                if (paramType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-                    val subType = advance()
-                    paramType = Token(paramType.type, paramType.lexeme + " " + subType.lexeme, paramType.literal, paramType.location)
+                var paramType: Token? = null
+                if (match(TokenType.COLON)) {
+                    paramType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع للوسيط بعد ':'.")
+                    if (paramType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
+                        val subType = advance()
+                        paramType = Token(paramType.type, paramType.lexeme + " " + subType.lexeme, paramType.literal, paramType.location)
+                    }
                 }
                 
                 parameters.add(Param(paramName, paramType))
@@ -60,11 +61,13 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         }
         consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس ')' بعد قائمة الوسائط.")
 
-        consume(TokenType.COLON, "يُتوقع وجود ':' قبل تحديد نوع الراجع.")
-        var returnType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع الراجع.")
-        if (returnType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-            val subType = advance()
-            returnType = Token(returnType.type, returnType.lexeme + " " + subType.lexeme, returnType.literal, returnType.location)
+        var returnType: Token? = null
+        if (match(TokenType.COLON)) {
+            returnType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع الراجع بعد ':'.")
+            if (returnType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
+                val subType = advance()
+                returnType = Token(returnType.type, returnType.lexeme + " " + subType.lexeme, returnType.literal, returnType.location)
+            }
         }
 
         consume(TokenType.BEGIN, "يُتوقع وجود الكلمة المفتاحية 'ابدأ' لبدء متن ال$kind.")
@@ -74,20 +77,38 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun letDeclaration(): Stmt {
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للمتغير.")
+        var type: Token? = null
+        if (match(TokenType.COLON)) {
+            type = consume(TokenType.IDENTIFIER, "يجب تحديد النوع بعد ':'.")
+            if (type.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
+                val subType = advance()
+                type = Token(type.type, type.lexeme + " " + subType.lexeme, type.literal, type.location)
+            }
+        }
+        
         var initializer: Expr? = null
         if (match(TokenType.EQUALS)) {
             initializer = expression()
         } else {
             error(name, "يجب تعيين قيمة ابتدائية للمتغير '${name.lexeme}'. لا يُسمح بتعريف متغيرات بدون تهيئة.", listOf(QuickFix("إضافة قيمة ابتدائية", "ADD_INITIALIZER")))
         }
-        return Stmt.Let(name, initializer)
+        return Stmt.Let(name, type, initializer)
     }
 
     private fun constDeclaration(): Stmt {
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للثابت.")
+        var type: Token? = null
+        if (match(TokenType.COLON)) {
+            type = consume(TokenType.IDENTIFIER, "يجب تحديد النوع بعد ':'.")
+            if (type.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
+                val subType = advance()
+                type = Token(type.type, type.lexeme + " " + subType.lexeme, type.literal, type.location)
+            }
+        }
+        
         consume(TokenType.EQUALS, "يجب تعيين قيمة ابتدائية للثابت باستخدام '='.")
         val initializer = expression()
-        return Stmt.Const(name, initializer)
+        return Stmt.Const(name, type, initializer)
     }
 
     private fun returnStatement(): Stmt {

@@ -11,6 +11,8 @@ import kotlinx.coroutines.launch
 import rtlide.core.document.Document
 import rtlide.lang.SakhrLang
 import rtlide.lang.analysis.Diagnostic
+import rtlide.lang.analysis.Location
+import rtlide.lang.analysis.QuickFix
 import rtlide.lang.highlight.Highlighter
 import rtlide.lang.schema.LanguageDefinition
 import rtlide.lang.tokenizer.Tokenizer
@@ -28,10 +30,10 @@ class EditorTab(
     var instantTooltip by mutableStateOf(false)
     
     var quickFixInput by mutableStateOf<String?>(null)
-    var activePendingFix by mutableStateOf<Pair<rtlide.lang.analysis.QuickFix, rtlide.lang.analysis.Location>?>(null)
+    var activePendingFix by mutableStateOf<Pair<QuickFix, Location>?>(null)
     var activePendingFixLength by mutableStateOf(0)
 
-    fun applyQuickFix(fix: rtlide.lang.analysis.QuickFix, location: rtlide.lang.analysis.Location, length: Int) {
+    fun applyQuickFix(fix: QuickFix, location: Location, length: Int) {
         val replacement = fix.replacement
         val lineIndex = location.line - 1
         val colIndex = location.column - 1
@@ -69,6 +71,59 @@ class EditorTab(
                     document.caret = rtlide.core.document.Caret(lineIndex, letIndex + 4)
                     document.selectionAnchor = rtlide.core.document.Caret(lineIndex, letIndex)
                     document.insert("ألزم")
+                }
+            }
+            replacement.startsWith("ADD_TYPE:") -> {
+                val typeName = replacement.removePrefix("ADD_TYPE:")
+                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.insert(": $typeName")
+            }
+            replacement == "REMOVE_TYPE" -> {
+                // Find ': Type' after the identifier
+                val afterId = line.substring(colIndex + length)
+                val colonIndex = afterId.indexOf(':')
+                if (colonIndex != -1) {
+                    val remaining = afterId.substring(colonIndex + 1).trimStart()
+                    // Find the end of the type name (letters and spaces for 'قائمة رقم')
+                    var typeEnd = 0
+                    while (typeEnd < remaining.length && (remaining[typeEnd].isLetter() || remaining[typeEnd].isWhitespace())) {
+                        typeEnd++
+                    }
+                    val totalToRemove = (afterId.length - (afterId.substring(colonIndex + 1 + typeEnd).length))
+                    
+                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length + totalToRemove)
+                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                    document.insert("")
+                }
+            }
+            replacement.startsWith("ADD_RETURN_TYPE:") -> {
+                val typeName = replacement.removePrefix("ADD_RETURN_TYPE:")
+                // Find ')' after the function name
+                val afterFn = line.substring(colIndex)
+                val closingParen = afterFn.indexOf(')')
+                if (closingParen != -1) {
+                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1)
+                    document.insert(": $typeName")
+                }
+            }
+            replacement == "REMOVE_RETURN_TYPE" -> {
+                // Find ': Type' after ')'
+                val afterFn = line.substring(colIndex)
+                val closingParen = afterFn.indexOf(')')
+                if (closingParen != -1) {
+                    val afterParen = afterFn.substring(closingParen + 1)
+                    val colonIndex = afterParen.indexOf(':')
+                    if (colonIndex != -1) {
+                         val remaining = afterParen.substring(colonIndex + 1).trimStart()
+                         var typeEnd = 0
+                         while (typeEnd < remaining.length && (remaining[typeEnd].isLetter() || remaining[typeEnd].isWhitespace())) {
+                             typeEnd++
+                         }
+                         val totalToRemove = (afterParen.length - (afterParen.substring(colonIndex + 1 + typeEnd).length))
+                         document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1 + totalToRemove)
+                         document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1)
+                         document.insert("")
+                    }
                 }
             }
             replacement.startsWith("CREATE_VAR:") -> {

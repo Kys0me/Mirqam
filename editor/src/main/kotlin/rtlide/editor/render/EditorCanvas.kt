@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import rtlide.core.document.Caret
 import rtlide.core.document.Document
@@ -141,22 +142,32 @@ fun EditorCanvas(
     var showMenu by remember { mutableStateOf(false) }
     
     var showTooltip by remember { mutableStateOf(false) }
+    var isTooltipHovered by remember { mutableStateOf(false) }
+    var activeTooltipDiag by remember { mutableStateOf<Diagnostic?>(null) }
     var selectedFixIndex by remember { mutableStateOf(0) }
     val hoveredDiag = tab.hoveredDiagnostic
 
-    LaunchedEffect(hoveredDiag, tab.instantTooltip) {
+    LaunchedEffect(hoveredDiag, isTooltipHovered, tab.instantTooltip) {
         if (hoveredDiag != null) {
+            activeTooltipDiag = hoveredDiag
             selectedFixIndex = 0
+            
             if (tab.instantTooltip) {
                 showTooltip = true
                 tab.instantTooltip = false
-            } else {
-                kotlinx.coroutines.delay(500.milliseconds)
+            } else if (!showTooltip) {
+                delay(400.milliseconds)
                 showTooltip = true
             }
+        } else if (isTooltipHovered) {
+            showTooltip = true
         } else {
-            showTooltip = false
-            tab.instantTooltip = false
+            delay(500.milliseconds)
+            if (tab.hoveredDiagnostic == null && !isTooltipHovered) {
+                showTooltip = false
+                activeTooltipDiag = null
+                tab.instantTooltip = false
+            }
         }
     }
 
@@ -354,6 +365,8 @@ fun EditorCanvas(
                     }
 
                     for (diag in diagnostics) {
+                        if (diag.severity == Severity.Information || diag.severity == Severity.Hint) continue
+                        
                         val lineIndex = diag.location.line - 1
                         val layout = layouts.getOrNull(lineIndex) ?: continue
                         val lineStr = doc.lineText(lineIndex)
@@ -432,10 +445,11 @@ fun EditorCanvas(
             }
         }
 
-        if (showTooltip && hoveredDiag != null) {
-            val lineIndex = (hoveredDiag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
+        if (showTooltip && activeTooltipDiag != null) {
+            val diag = activeTooltipDiag!!
+            val lineIndex = (diag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(lineIndex)
-            val col = (hoveredDiag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
+            val col = (diag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
             val x = if (layout != null) gutterWidthPx + originX(layout) + layout.getCursorRect(col).left else gutterWidthPx
             val y = lineIndex * lineHeightPx + lineHeightPx - vscroll.value
             
@@ -443,10 +457,22 @@ fun EditorCanvas(
                 Modifier
                     .align(AbsoluteAlignment.TopLeft)
                     .absoluteOffset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                when (event.type) {
+                                    PointerEventType.Enter -> isTooltipHovered = true
+                                    PointerEventType.Exit -> isTooltipHovered = false
+                                }
+                            }
+                        }
+                    }
             ) {
-                ProblemTooltip(hoveredDiag, selectedFixIndex) { fix -> 
-                    tab.applyQuickFix(fix, hoveredDiag.location, hoveredDiag.length)
+                ProblemTooltip(diag, selectedFixIndex) { fix -> 
+                    tab.applyQuickFix(fix, diag.location, diag.length)
                     showTooltip = false 
+                    activeTooltipDiag = null
                 }
             }
         }
