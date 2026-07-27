@@ -21,7 +21,7 @@ class ShellViewModel(val scope: CoroutineScope) {
     var currentProject by mutableStateOf<Project?>(null)
         private set
 
-    val editorState = EditorState()
+    val editorState = EditorState(scope)
     val terminalBackend = ShellProcessBackend(scope)
 
     private var autoSaveJobs = mutableMapOf<String, Job>()

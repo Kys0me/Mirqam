@@ -37,6 +37,7 @@ fun EditorArea(
                     .distinct()
             }
             EditorCanvas(
+                state = state,
                 doc = activeTab.document,
                 highlighter = activeTab.highlighter,
                 keywords = keywords,

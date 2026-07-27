@@ -22,7 +22,14 @@ import rtlide.core.theme.IdeColors
 /** Line-number gutter. Under LayoutDirection.Rtl this Row-child sits on the
  *  RIGHT automatically — the mirror of IntelliJ's left gutter. */
 @Composable
-fun Gutter(count: Int, caretLine: Int, lineHeight: Dp, width: Dp, modifier: Modifier = Modifier) {
+fun Gutter(
+    count: Int,
+    caretLine: Int,
+    lineHeight: Dp,
+    width: Dp,
+    fontSize: Float,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier
             .width(width)
@@ -41,7 +48,7 @@ fun Gutter(count: Int, caretLine: Int, lineHeight: Dp, width: Dp, modifier: Modi
                 Text(
                     text = n.toString(),
                     color = if (isCurrentLine) Color.White else IdeColors.GutterForeground,
-                    fontSize = 12.sp,
+                    fontSize = (fontSize * 0.8f).sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.align(Alignment.CenterStart),
                 )

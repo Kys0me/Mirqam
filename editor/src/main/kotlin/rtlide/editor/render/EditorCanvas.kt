@@ -47,6 +47,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
@@ -66,6 +67,7 @@ import kotlinx.coroutines.yield
 import rtlide.core.document.Caret
 import rtlide.core.document.Document
 import rtlide.core.theme.IdeColors
+import rtlide.editor.EditorState
 import rtlide.editor.intelligence.CompletionList
 import rtlide.editor.intelligence.CompletionState
 import rtlide.lang.highlight.Highlighter
@@ -85,6 +87,7 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun EditorCanvas(
+    state: EditorState,
     doc: Document,
     highlighter: Highlighter,
     keywords: List<String>,
@@ -98,15 +101,16 @@ fun EditorCanvas(
     val vscroll = rememberScrollState()
     val completion = remember { CompletionState() }
 
-    val lineHeight = 24.dp
+    val fontSize = state.fontSize
+    val lineHeight = (fontSize * 1.6f).dp
     val lineHeightPx = with(density) { lineHeight.toPx() }
-    val gutterWidth = 58.dp
+    val gutterWidth = (fontSize * 4f).dp
     val gutterWidthPx = with(density) { gutterWidth.toPx() }
 
-    val baseStyle = remember {
+    val baseStyle = remember(fontSize) {
         TextStyle(
             fontFamily = FontFamily.Monospace,
-            fontSize = 15.sp,
+            fontSize = fontSize.sp,
             color = IdeColors.TextDefault,
             // Resolve base direction per line from its first strong character.
             textDirection = TextDirection.Content,
@@ -133,7 +137,7 @@ fun EditorCanvas(
         val canvasWidthPx = (editorWidthPx - gutterWidthPx).coerceAtLeast(100f)
 
         // Cache one layout per line; recompute only when text / theme / width change.
-        val layouts: List<TextLayoutResult> = remember(doc.lines, highlighter.version, canvasWidthPx) {
+        val layouts: List<TextLayoutResult> = remember(doc.lines, highlighter.version, canvasWidthPx, fontSize) {
             doc.lines.map { line ->
                 measurer.measure(
                     text = highlighter.highlight(line),
@@ -171,6 +175,20 @@ fun EditorCanvas(
                     handleKey(event, doc, completion, keywords, indent) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == PointerEventType.Scroll && event.keyboardModifiers.isCtrlPressed) {
+                                val delta = event.changes.first().scrollDelta.y
+                                if (delta != 0f) {
+                                    state.zoom(delta)
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                }
         ) {
             Row(Modifier.height(contentHeight).fillMaxWidth()) {
                 // Gutter first => right side in RTL.
@@ -178,7 +196,8 @@ fun EditorCanvas(
                     count = doc.lines.size,
                     caretLine = doc.caret.line,
                     lineHeight = lineHeight,
-                    width = gutterWidth
+                    width = gutterWidth,
+                    fontSize = fontSize
                 )
 
                 Canvas(

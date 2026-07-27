@@ -1,12 +1,20 @@
 package rtlide.shell
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -14,12 +22,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import rtlide.components.filepicker.ComposeFileDialog
 import rtlide.components.filepicker.FilePickerState
 import rtlide.core.project.Project
 import rtlide.core.project.RecentProjectsStore
+import rtlide.core.theme.IdeColors
 import rtlide.editor.EditorArea
 import rtlide.shell.frame.HorizontalResizer
 import rtlide.shell.frame.MainToolbar
@@ -108,7 +120,17 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                 }
 
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    EditorArea(vm.editorState, Modifier.weight(1f).fillMaxWidth())
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        EditorArea(vm.editorState, Modifier.fillMaxSize())
+                        
+                        if (vm.editorState.showZoomPopup) {
+                            ZoomPopup(
+                                fontSize = vm.editorState.fontSize.toInt(),
+                                onUndo = { vm.editorState.undoZoom() },
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+                            )
+                        }
+                    }
 
                     if (layout.isVisible(ToolWindowId.Terminal)) {
                         HorizontalResizer(onDrag = { layout.resizeBottom(it) })
@@ -133,5 +155,30 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
             state = filePickerState,
             onDismiss = { showFileDialog = false }
         )
+    }
+}
+
+@Composable
+fun ZoomPopup(fontSize: Int, onUndo: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .background(IdeColors.TabInactiveBackground, RoundedCornerShape(4.dp))
+            .border(1.dp, IdeColors.BorderColor, RoundedCornerShape(4.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "حجم الخط: $fontSize%",
+                color = IdeColors.TextDefault,
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "تراجع",
+                color = Color(0xFF4EA9FF),
+                fontSize = 13.sp,
+                modifier = Modifier.clickable { onUndo() }
+            )
+        }
     }
 }
