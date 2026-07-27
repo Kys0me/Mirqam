@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -32,17 +31,9 @@ fun EditorArea(
     Column(modifier.background(IdeColors.GutterBackground)) {
         EditorTabBar(state)
         if (activeTab != null) {
-            val keywords = remember(activeTab.lang) {
-                (activeTab.lang.grammar.controlKeywords + activeTab.lang.grammar.keywords + activeTab.lang.grammar.builtins + activeTab.lang.grammar.constants)
-                    .distinct()
-            }
             EditorCanvas(
                 state = state,
-                doc = activeTab.document,
-                highlighter = activeTab.highlighter,
-                keywords = keywords,
-                brackets = activeTab.lang.brackets,
-                indent = activeTab.lang.indent,
+                tab = activeTab,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         } else {

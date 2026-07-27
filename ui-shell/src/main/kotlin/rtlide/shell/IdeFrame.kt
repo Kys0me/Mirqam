@@ -79,6 +79,10 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
         keymap.bind("Undo") { vm.editorState.activeTab?.document?.undo() }
         keymap.bind("Redo") { vm.editorState.activeTab?.document?.redo() }
         keymap.bind("CloseTab") { vm.editorState.closeActiveTab() }
+
+        keymap.bind("NextProblem") { vm.editorState.gotoNextProblem() }
+        keymap.bind("PrevProblem") { vm.editorState.gotoPreviousProblem() }
+        keymap.bind("ShowIntentionActions") { vm.editorState.activeTab?.showIntentionActions() }
     }
 
     if (vm.currentProject == null && vm.editorState.tabs.isEmpty()) {
@@ -132,9 +136,17 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                         }
                     }
 
-                    if (layout.isVisible(ToolWindowId.Terminal)) {
+                    if (layout.isVisible(ToolWindowId.Terminal) || layout.isVisible(ToolWindowId.Problems)) {
                         HorizontalResizer(onDrag = { layout.resizeBottom(it) })
-                        TerminalPanel(vm.terminalBackend, Modifier.height(layout.bottomHeight).fillMaxWidth())
+                        Box(Modifier.height(layout.bottomHeight).fillMaxWidth()) {
+                            if (layout.isVisible(ToolWindowId.Terminal)) {
+                                TerminalPanel(vm.terminalBackend, Modifier.fillMaxSize())
+                            }
+                            if (layout.isVisible(ToolWindowId.Problems)) {
+                                // Simple switch for now. In a real IDE these are often tabs in the same panel.
+                                rtlide.shell.toolwindow.ProblemsPanel(vm.editorState, Modifier.fillMaxSize())
+                            }
+                        }
                     }
                 }
             }

@@ -65,6 +65,9 @@ class KeymapController(private val bindings: Map<Shortcut, String>) {
                 Shortcut(Key.Y, ctrl = true) to "Redo",
                 Shortcut(Key.Z, ctrl = true, shift = true) to "Redo",
                 Shortcut(Key.W, ctrl = true) to "CloseTab",
+                Shortcut(Key.F2) to "NextProblem",
+                Shortcut(Key.F2, shift = true) to "PrevProblem",
+                Shortcut(Key.Enter, alt = true) to "ShowIntentionActions",
             )
         )
     }

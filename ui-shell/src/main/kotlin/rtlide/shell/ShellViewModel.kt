@@ -14,6 +14,7 @@ import rtlide.core.project.ProjectState
 import rtlide.core.project.ProjectStateStore
 import rtlide.editor.EditorState
 import rtlide.terminal.pty.ShellProcessBackend
+import rtlide.lang.analysis.SakhrAnalyzer
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -23,6 +24,7 @@ class ShellViewModel(val scope: CoroutineScope) {
 
     val editorState = EditorState(scope)
     val terminalBackend = ShellProcessBackend(scope)
+    private val sakhrAnalyzer = SakhrAnalyzer()
 
     private var autoSaveJobs = mutableMapOf<String, Job>()
 
@@ -73,6 +75,13 @@ class ShellViewModel(val scope: CoroutineScope) {
         val tab = editorState.tabs.find { it.file.absolutePath == file.absolutePath } ?: return
         scope.launch {
             snapshotFlow { tab.document.text() }.collectLatest { content ->
+                // Run analysis if it's a Sakhr file
+                if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
+                    tab.diagnostics = sakhrAnalyzer.analyze(content)
+                } else {
+                    tab.diagnostics = emptyList()
+                }
+                
                 // Delay auto-save to debounce typing
                 delay(2000.milliseconds)
                 saveFile(file, content)

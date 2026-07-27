@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import rtlide.core.document.Document
 import rtlide.lang.SakhrLang
+import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.highlight.Highlighter
 import rtlide.lang.schema.LanguageDefinition
 import rtlide.lang.tokenizer.Tokenizer
@@ -21,7 +22,96 @@ class EditorTab(
     val document: Document,
     val lang: LanguageDefinition,
     val highlighter: Highlighter
-)
+) {
+    var diagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
+    var hoveredDiagnostic by mutableStateOf<Diagnostic?>(null)
+    var instantTooltip by mutableStateOf(false)
+    
+    var quickFixInput by mutableStateOf<String?>(null)
+    var activePendingFix by mutableStateOf<Pair<rtlide.lang.analysis.QuickFix, rtlide.lang.analysis.Location>?>(null)
+    var activePendingFixLength by mutableStateOf(0)
+
+    fun applyQuickFix(fix: rtlide.lang.analysis.QuickFix, location: rtlide.lang.analysis.Location, length: Int) {
+        val replacement = fix.replacement
+        val lineIndex = location.line - 1
+        val colIndex = location.column - 1
+        val line = document.lineText(lineIndex)
+        
+        when {
+            replacement == "CHANGE_TO_VAR" -> {
+                // Find 'ألزم' before the variable
+                val startOfLine = line.substring(0, colIndex)
+                val constIndex = startOfLine.lastIndexOf("ألزم")
+                if (constIndex != -1) {
+                    document.caret = rtlide.core.document.Caret(lineIndex, constIndex + 4)
+                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, constIndex)
+                    document.insert("ليكن")
+                }
+            }
+            replacement == "ADD_INITIALIZER" -> {
+                if (quickFixInput == null) {
+                    activePendingFix = fix to location
+                    activePendingFixLength = length
+                    quickFixInput = "" // Initialize to empty string to keep dialog open
+                    return
+                }
+                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.insert(" = $quickFixInput")
+                quickFixInput = null
+                activePendingFix = null
+                activePendingFixLength = 0
+            }
+            replacement == "ألزم" -> {
+                // Find 'ليكن' before the variable
+                val startOfLine = line.substring(0, colIndex)
+                val letIndex = startOfLine.lastIndexOf("ليكن")
+                if (letIndex != -1) {
+                    document.caret = rtlide.core.document.Caret(lineIndex, letIndex + 4)
+                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, letIndex)
+                    document.insert("ألزم")
+                }
+            }
+            replacement.startsWith("CREATE_VAR:") -> {
+                val varName = replacement.removePrefix("CREATE_VAR:")
+                // Smart search for scope start (nearest "ابدأ" upwards or start of file)
+                var insertLine = 0
+                var indent = ""
+                for (i in lineIndex downTo 0) {
+                    val l = document.lineText(i)
+                    if (l.contains("ابدأ")) {
+                        insertLine = i + 1
+                        // Heuristic for indentation: look at the line with "ابدأ" or the line after it
+                        val match = Regex("^\\s*").find(l)
+                        indent = (match?.value ?: "") + "    "
+                        break
+                    }
+                }
+                
+                val newCaret = rtlide.core.document.Caret(insertLine, 0)
+                document.caret = newCaret
+                document.insert("${indent}ليكن $varName\n")
+            }
+            else -> {
+                // Suggestion replacement
+                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex)
+                document.insert(replacement)
+            }
+        }
+    }
+
+    fun showIntentionActions() {
+        val currentCaret = document.caret
+        val diag = diagnostics.find { d ->
+            d.location.line - 1 == currentCaret.line &&
+            currentCaret.col in (d.location.column - 1)..(d.location.column - 1 + d.length)
+        }
+        if (diag != null) {
+            hoveredDiagnostic = diag
+            instantTooltip = true
+        }
+    }
+}
 
 class EditorState(private val scope: CoroutineScope? = null) {
     val tabs = mutableStateListOf<EditorTab>()
@@ -91,6 +181,34 @@ class EditorState(private val scope: CoroutineScope? = null) {
     }
     
     fun closeActiveTab() {
-        closeTab(activeTabIndex)
+        if (activeTabIndex != -1) closeTab(activeTabIndex)
+    }
+
+    fun gotoNextProblem() {
+        val tab = activeTab ?: return
+        if (tab.diagnostics.isEmpty()) return
+        
+        val sorted = tab.diagnostics.sortedWith(compareBy({ it.location.line }, { it.location.column }))
+        val currentCaret = tab.document.caret
+        
+        val next = sorted.find { it.location.line - 1 > currentCaret.line || 
+                                (it.location.line - 1 == currentCaret.line && it.location.column - 1 > currentCaret.col) }
+                ?: sorted.first()
+        
+        tab.document.caret = rtlide.core.document.Caret(next.location.line - 1, next.location.column - 1)
+    }
+
+    fun gotoPreviousProblem() {
+        val tab = activeTab ?: return
+        if (tab.diagnostics.isEmpty()) return
+        
+        val sorted = tab.diagnostics.sortedWith(compareBy({ it.location.line }, { it.location.column }))
+        val currentCaret = tab.document.caret
+        
+        val prev = sorted.findLast { it.location.line - 1 < currentCaret.line || 
+                                    (it.location.line - 1 == currentCaret.line && it.location.column - 1 < currentCaret.col) }
+                ?: sorted.last()
+        
+        tab.document.caret = rtlide.core.document.Caret(prev.location.line - 1, prev.location.column - 1)
     }
 }
