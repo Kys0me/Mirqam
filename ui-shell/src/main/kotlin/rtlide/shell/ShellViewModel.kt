@@ -1,11 +1,11 @@
 package rtlide.shell
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -13,20 +13,30 @@ import rtlide.core.project.Project
 import rtlide.core.project.ProjectState
 import rtlide.core.project.ProjectStateStore
 import rtlide.editor.EditorState
-import rtlide.terminal.pty.ShellProcessBackend
 import rtlide.lang.analysis.SakhrAnalyzer
+import rtlide.terminal.pty.Pty4jBackend
+import rtlide.terminal.pty.TerminalBackend
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
+
+class RunTab(
+    val name: String, 
+    val backend: TerminalBackend,
+    var lastCommand: Array<String>? = null
+)
 
 class ShellViewModel(val scope: CoroutineScope) {
     var currentProject by mutableStateOf<Project?>(null)
         private set
 
     val editorState = EditorState(scope)
-    val terminalBackend = ShellProcessBackend(scope)
-    private val sakhrAnalyzer = SakhrAnalyzer()
+    
+    val runTabs = mutableStateListOf<RunTab>()
+    var activeRunTabIndex by mutableStateOf(0)
 
-    private var autoSaveJobs = mutableMapOf<String, Job>()
+    val activeRunTab: RunTab? get() = runTabs.getOrNull(activeRunTabIndex)
+
+    private val sakhrAnalyzer = SakhrAnalyzer()
 
     init {
         // Persist UI state when tabs change or active tab changes
@@ -59,7 +69,53 @@ class ShellViewModel(val scope: CoroutineScope) {
             }
         }
         
-        terminalBackend.start()
+        if (runTabs.isEmpty()) {
+            addRunTab("تشغيل 1")
+        }
+    }
+
+    fun addRunTab(name: String = "تشغيل جديد"): RunTab {
+        val backend = Pty4jBackend(scope, currentProject?.path ?: System.getProperty("user.home"))
+        val tab = RunTab(name, backend)
+        runTabs.add(tab)
+        activeRunTabIndex = runTabs.lastIndex
+        return tab
+    }
+
+    fun closeRunTab(index: Int) {
+        if (index in runTabs.indices) {
+            runTabs[index].backend.close()
+            runTabs.removeAt(index)
+            if (activeRunTabIndex >= runTabs.size) {
+                activeRunTabIndex = (runTabs.size - 1).coerceAtLeast(0)
+            }
+        }
+    }
+
+    fun runCommand(cmd: Array<String>, tabName: String = "تشغيل") {
+        scope.launch {
+            var tab = runTabs.find { it.name == tabName }
+            if (tab == null) {
+                tab = addRunTab(tabName)
+            } else {
+                activeRunTabIndex = runTabs.indexOf(tab)
+            }
+            
+            // Clear the console before running
+            tab.backend.clear()
+            
+            tab.lastCommand = cmd
+            tab.backend.start(cmd)
+        }
+    }
+
+    fun stopProcess(tab: RunTab) {
+        tab.backend.close()
+    }
+
+    fun rerunProcess(tab: RunTab) {
+        val cmd = tab.lastCommand ?: return
+        runCommand(cmd, tab.name)
     }
 
     fun openFile(file: File) {

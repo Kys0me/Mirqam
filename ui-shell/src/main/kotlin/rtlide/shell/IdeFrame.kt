@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.MutableStateFlow
 import rtlide.components.filepicker.ComposeFileDialog
 import rtlide.components.filepicker.FilePickerState
 import rtlide.core.project.Project
@@ -41,10 +43,10 @@ import rtlide.shell.frame.WelcomeView
 import rtlide.shell.keymap.KeymapController
 import rtlide.shell.toolwindow.IdeLayoutState
 import rtlide.shell.toolwindow.ProjectToolWindow
+import rtlide.shell.toolwindow.RunPanel
 import rtlide.shell.toolwindow.Stripe
 import rtlide.shell.toolwindow.ToolWindowId
 import rtlide.shell.toolwindow.ToolWindowStripe
-import rtlide.terminal.ui.TerminalPanel
 
 /**
  * The IntelliJ-style IDE frame.
@@ -73,7 +75,7 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
 
     LaunchedEffect(keymap, layout, vm) {
         keymap.bind("ToggleProjectView") { layout.toggle(ToolWindowId.Project) }
-        keymap.bind("ToggleTerminal") { layout.toggle(ToolWindowId.Terminal) }
+        keymap.bind("ToggleRun") { layout.toggle(ToolWindowId.Run) }
         keymap.bind("HideAllWindows") { layout.hideAllToolWindows() }
         
         keymap.bind("Undo") { vm.editorState.activeTab?.document?.undo() }
@@ -94,6 +96,9 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
         )
     } else {
         Column(modifier.fillMaxSize()) {
+            val activeRunTab = vm.activeRunTab
+            val isRunning by (activeRunTab?.backend?.isAlive ?: MutableStateFlow(false)).collectAsState()
+
             MainToolbar(
                 onOpenFile = { showFileDialog = true },
                 onOpenProject = { showFileDialog = true },
@@ -102,14 +107,18 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                     if (tab != null) {
                         val file = tab.file
                         val cmd = if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
-                            "sakhr شغل \"${file.absolutePath}\""
+                            arrayOf("sakhr", "شغل", file.absolutePath)
                         } else {
-                            "echo \"لا توجد تهيئة تشغيل لهذه اللغة حالياً.\""
+                            arrayOf("echo", "لا توجد تهيئة تشغيل لهذه اللغة حالياً.")
                         }
-                        layout.show(ToolWindowId.Terminal)
-                        vm.terminalBackend.write(cmd + "\n")
+                        layout.show(ToolWindowId.Run)
+                        vm.runCommand(cmd, "تشغيل")
                     }
                 },
+                onStop = { vm.activeRunTab?.let { vm.stopProcess(it) } },
+                onRerun = { vm.activeRunTab?.let { vm.rerunProcess(it) } },
+                isRunning = isRunning,
+                canRerun = vm.activeRunTab?.lastCommand != null,
                 Modifier.fillMaxWidth().height(36.dp)
             )
 
@@ -136,14 +145,13 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                         }
                     }
 
-                    if (layout.isVisible(ToolWindowId.Terminal) || layout.isVisible(ToolWindowId.Problems)) {
+                    if (layout.isVisible(ToolWindowId.Run) || layout.isVisible(ToolWindowId.Problems)) {
                         HorizontalResizer(onDrag = { layout.resizeBottom(it) })
                         Box(Modifier.height(layout.bottomHeight).fillMaxWidth()) {
-                            if (layout.isVisible(ToolWindowId.Terminal)) {
-                                TerminalPanel(vm.terminalBackend, Modifier.fillMaxSize())
+                            if (layout.isVisible(ToolWindowId.Run)) {
+                                RunPanel(vm, Modifier.fillMaxSize())
                             }
                             if (layout.isVisible(ToolWindowId.Problems)) {
-                                // Simple switch for now. In a real IDE these are often tabs in the same panel.
                                 rtlide.shell.toolwindow.ProblemsPanel(vm.editorState, Modifier.fillMaxSize())
                             }
                         }

@@ -12,7 +12,7 @@ enum class Stripe { Start, Bottom, End }
 enum class ToolWindowId(val title: String, val stripe: Stripe) {
     Project("مشروع", Stripe.Start),
     Structure("البنية", Stripe.Start),
-    Terminal("طرفية", Stripe.Bottom),
+    Run("تشغيل", Stripe.Bottom),
     Problems("مشاكل", Stripe.Bottom),
 }
 
@@ -22,7 +22,7 @@ class IdeLayoutState {
 
     private val visibility = mutableStateMapOf(
         ToolWindowId.Project to true,
-        ToolWindowId.Terminal to true,
+        ToolWindowId.Run to true,
     )
 
     var startWidth by mutableStateOf(280.dp)

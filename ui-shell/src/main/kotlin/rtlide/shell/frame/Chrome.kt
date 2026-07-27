@@ -11,13 +11,16 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,23 +42,62 @@ fun MainToolbar(
     onOpenFile: () -> Unit,
     onOpenProject: () -> Unit,
     onRun: () -> Unit,
+    onStop: () -> Unit = {},
+    onRerun: () -> Unit = {},
+    isRunning: Boolean = false,
+    canRerun: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier.background(IdeColors.ToolbarBackground).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("RTL IDE", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp))
+        Text(
+            "RTL IDE",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
         Spacer(Modifier.width(12.dp))
-        
+
         IdeMenuBar(onOpenFile, onOpenProject)
-        
+
         Spacer(Modifier.width(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onRun() }) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color(0xFF4EC9B0), modifier = Modifier.height(18.dp))
+
+        // Run Button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onRun() }.padding(horizontal = 4.dp)
+        ) {
+            Icon(
+                Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color(0xFF4EC9B0),
+                modifier = Modifier.height(18.dp)
+            )
             Spacer(Modifier.width(4.dp))
             Text("تشغيل", color = Color(0xFF4EC9B0), fontSize = 13.sp)
         }
+
+        // Rerun Button
+        IconButton(onClick = onRerun, enabled = canRerun, modifier = Modifier.size(28.dp)) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = "Rerun",
+                tint = if (canRerun) Color(0xFF59A275) else IdeColors.TextMuted,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
+        // Stop Button
+        IconButton(onClick = onStop, enabled = isRunning, modifier = Modifier.size(28.dp)) {
+            Box(
+                Modifier.size(10.dp)
+                    .background(if (isRunning) Color(0xFFCF5B56) else IdeColors.TextMuted)
+            )
+        }
+
         Spacer(Modifier.weight(1f))
         Text("العربية البرمجية", color = IdeColors.TextMuted, fontSize = 12.sp)
     }
@@ -67,13 +109,21 @@ fun IdeMenuBar(onOpenFile: () -> Unit, onOpenProject: () -> Unit) {
         IdeMenuCategory("ملف") {
             IdeMenuItem("فتح ملف...", onClick = onOpenFile)
             IdeMenuItem("فتح مشروع...", onClick = onOpenProject)
-            HorizontalDivider(color = IdeColors.BorderColor, modifier = Modifier.padding(vertical = 4.dp))
-            IdeMenuItem("خروج", onClick = { /* exitApplication handles this in Main, we might need to pass a callback */ })
+            HorizontalDivider(
+                color = IdeColors.BorderColor,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            IdeMenuItem(
+                "خروج",
+                onClick = { /* exitApplication handles this in Main, we might need to pass a callback */ })
         }
         IdeMenuCategory("تحرير") {
             IdeMenuItem("تراجع")
             IdeMenuItem("إعادة")
-            HorizontalDivider(color = IdeColors.BorderColor, modifier = Modifier.padding(vertical = 4.dp))
+            HorizontalDivider(
+                color = IdeColors.BorderColor,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
             IdeMenuItem("قص")
             IdeMenuItem("نسخ")
             IdeMenuItem("لصق")
@@ -99,7 +149,8 @@ fun IdeMenuCategory(title: String, content: @Composable () -> Unit) {
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.background(IdeColors.TabInactiveBackground).border(1.dp, IdeColors.BorderColor)
+            modifier = Modifier.background(IdeColors.TabInactiveBackground)
+                .border(1.dp, IdeColors.BorderColor)
         ) {
             content()
         }
@@ -125,7 +176,11 @@ fun StatusBar(caretLine: Int, caretCol: Int, langName: String, modifier: Modifie
     ) {
         Text("RTL ⇄", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.width(20.dp))
-        Text("السطر ${caretLine + 1}، العمود ${caretCol + 1}", color = Color.White, fontSize = 11.sp)
+        Text(
+            "السطر ${caretLine + 1}، العمود ${caretCol + 1}",
+            color = Color.White,
+            fontSize = 11.sp
+        )
         Spacer(Modifier.weight(1f))
         Text(langName, color = Color.White, fontSize = 11.sp)
         Spacer(Modifier.width(20.dp))

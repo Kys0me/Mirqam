@@ -5,14 +5,6 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import kotlin.text.Charsets.UTF_8
 
-/**
- * Incrementally decodes UTF-8 byte chunks from a process, carrying over any
- * trailing PARTIAL multi-byte sequence to the next chunk. Without this, an
- * Arabic code point whose bytes straddle a read boundary would decode to
- * replacement characters and corrupt the Bidi run.
- *
- * Not thread-safe; call from a single reader coroutine.
- */
 class Utf8StreamDecoder {
 
     private val decoder = UTF_8.newDecoder()
