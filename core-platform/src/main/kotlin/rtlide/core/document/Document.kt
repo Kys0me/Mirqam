@@ -122,12 +122,94 @@ class Document(initial: String = "") {
         selectionAnchor = null
     }
 
+    fun deleteForward() {
+        if (hasSelection) {
+            pushUndo()
+            deleteSelectionInternal()
+            return
+        }
+        val (l, c) = caret
+        val current = lineText(l)
+        if (l == lines.size - 1 && c == current.length) return
+        pushUndo()
+        val next = lines.toMutableList()
+        when {
+            c < current.length -> {
+                next[l] = current.removeRange(c, c + 1)
+                lines = next
+            }
+            l < lines.size - 1 -> {
+                val nextLine = lineText(l + 1)
+                next[l] = current + nextLine
+                next.removeAt(l + 1)
+                lines = next
+            }
+        }
+        selectionAnchor = null
+    }
+
     fun moveCaret(deltaLine: Int, deltaCol: Int, extendSelection: Boolean) {
         if (extendSelection && selectionAnchor == null) selectionAnchor = caret
         if (!extendSelection) selectionAnchor = null
         val line = (caret.line + deltaLine).coerceIn(0, (lines.size - 1).coerceAtLeast(0))
         val col = (caret.col + deltaCol).coerceIn(0, lineText(line).length)
         caret = Caret(line, col)
+    }
+
+    fun moveCaretToLineStart(extendSelection: Boolean) {
+        if (extendSelection && selectionAnchor == null) selectionAnchor = caret
+        if (!extendSelection) selectionAnchor = null
+        val current = lineText(caret.line)
+        val firstNonWhitespace = current.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
+        val targetCol = if (caret.col == firstNonWhitespace && caret.col != 0) 0 else firstNonWhitespace
+        caret = Caret(caret.line, targetCol)
+    }
+
+    fun moveCaretToLineEnd(extendSelection: Boolean) {
+        if (extendSelection && selectionAnchor == null) selectionAnchor = caret
+        if (!extendSelection) selectionAnchor = null
+        caret = Caret(caret.line, lineText(caret.line).length)
+    }
+
+    fun moveCaretByWord(delta: Int, extendSelection: Boolean) {
+        if (extendSelection && selectionAnchor == null) selectionAnchor = caret
+        if (!extendSelection) selectionAnchor = null
+        val (l, c) = caret
+        val current = lineText(l)
+        
+        var newCol = c
+        if (delta > 0) {
+            // Forward
+            if (c == current.length) {
+                if (l < lines.size - 1) {
+                    caret = Caret(l + 1, 0)
+                }
+            } else {
+                while (newCol < current.length && !current[newCol].isLetterOrDigit()) newCol++
+                while (newCol < current.length && current[newCol].isLetterOrDigit()) newCol++
+                caret = Caret(l, newCol)
+            }
+        } else {
+            // Backward
+            if (c == 0) {
+                if (l > 0) {
+                    caret = Caret(l - 1, lineText(l - 1).length)
+                }
+            } else {
+                while (newCol > 0 && !current[newCol - 1].isLetterOrDigit()) newCol--
+                while (newCol > 0 && current[newCol - 1].isLetterOrDigit()) newCol--
+                caret = Caret(l, newCol)
+            }
+        }
+    }
+
+    fun deleteByWord(delta: Int) {
+        if (hasSelection) {
+            deleteSelection()
+            return
+        }
+        moveCaretByWord(delta, true)
+        deleteSelection()
     }
 
     val hasSelection: Boolean get() = selectionAnchor != null && selectionAnchor != caret

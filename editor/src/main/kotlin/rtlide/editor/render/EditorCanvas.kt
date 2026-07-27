@@ -95,8 +95,10 @@ import rtlide.editor.intelligence.CompletionState
 import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Severity
 import rtlide.lang.indent.Brackets
+import rtlide.lang.indent.getAutoCloseTrigger
 import rtlide.lang.indent.newlineIndent
 import rtlide.lang.schema.IndentRules
+import rtlide.lang.schema.TextDir
 import java.awt.event.KeyEvent.CHAR_UNDEFINED
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
@@ -250,7 +252,7 @@ fun EditorCanvas(
                             }
                         }
                     }
-                    handleKey(event, doc, completion, allSuggestions, indent) { applyCompletion() }
+                    handleKey(event, doc, completion, allSuggestions, indent, tab.lang.textDirection) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
                 .pointerInput(Unit) {
@@ -687,26 +689,71 @@ private fun handleKey(
     completion: CompletionState,
     suggestions: List<String>,
     indent: IndentRules,
+    textDirection: TextDir,
     applyCompletion: () -> Unit,
 ): Boolean {
     if (e.type != KeyEventType.KeyDown) return false
     
-    if (e.isCtrlPressed) {
+    val isShift = e.isShiftPressed
+    val isCtrl = e.isCtrlPressed
+
+    if (isCtrl) {
         when (e.key) {
             Key.C -> { doc.copySelection(); return true }
             Key.V -> { doc.paste(); return true }
             Key.X -> { doc.cutSelection(); return true }
             Key.A -> { doc.selectAll(); return true }
+            Key.Z -> { doc.undo(); return true }
+            Key.Y -> { doc.redo(); return true }
+            Key.DirectionLeft -> {
+                val delta = if (textDirection == TextDir.RTL) 1 else -1
+                doc.moveCaretByWord(delta, isShift)
+                return true
+            }
+            Key.DirectionRight -> {
+                val delta = if (textDirection == TextDir.RTL) -1 else 1
+                doc.moveCaretByWord(delta, isShift)
+                return true
+            }
+            Key.Backspace -> {
+                doc.deleteByWord(-1)
+                return true
+            }
+            Key.Delete -> {
+                doc.deleteByWord(1)
+                return true
+            }
         }
     }
 
     when (e.key) {
+        Key.MoveHome -> {
+            doc.moveCaretToLineStart(isShift)
+            return true
+        }
+        Key.MoveEnd -> {
+            doc.moveCaretToLineEnd(isShift)
+            return true
+        }
         Key.Escape -> {
             if (completion.visible) { completion.hide(); return true }
             return false
         }
         Key.Backspace -> {
-            doc.backspace(); refreshCompletion(doc, completion, suggestions); return true
+            val line = doc.lineText(doc.caret.line)
+            val before = line.substring(0, doc.caret.col)
+            if (before.isNotEmpty() && before.all { it == ' ' || it == '\t' }) {
+                val toDelete = if (indent.useSpaces) indent.indentSize else 1
+                repeat(toDelete) { doc.backspace() }
+            } else {
+                doc.backspace()
+            }
+            refreshCompletion(doc, completion, suggestions)
+            return true
+        }
+        Key.Delete -> {
+            doc.deleteForward()
+            return true
         }
         Key.Tab -> {
             if (completion.visible) { applyCompletion(); return true }
@@ -714,21 +761,40 @@ private fun handleKey(
         }
         Key.Enter -> {
             if (completion.visible) { applyCompletion(); return true }
-            doc.insert(newlineIndent(doc.lineText(doc.caret.line), indent))
+            val currentLine = doc.lineText(doc.caret.line)
+            val autoClose = getAutoCloseTrigger(currentLine, indent)
+            val indentStr = newlineIndent(currentLine, indent)
+            doc.insert(indentStr)
+            if (autoClose != null) {
+                val (l, c) = doc.caret
+                val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
+                doc.insert("\n" + leading + autoClose)
+                doc.caret = Caret(l, c)
+            }
             completion.hide(); return true
         }
         Key.DirectionUp -> {
             if (completion.visible) { completion.selected = (completion.selected - 1).coerceAtLeast(0); return true }
-            doc.moveCaret(-1, 0, e.isShiftPressed); return true
+            doc.moveCaret(-1, 0, isShift); return true
         }
         Key.DirectionDown -> {
             if (completion.visible) {
                 completion.selected = (completion.selected + 1).coerceAtMost(completion.items.lastIndex.coerceAtLeast(0)); return true
             }
-            doc.moveCaret(1, 0, e.isShiftPressed); return true
+            doc.moveCaret(1, 0, isShift); return true
         }
-        Key.DirectionLeft -> { completion.hide(); doc.moveCaret(0, -1, e.isShiftPressed); return true }
-        Key.DirectionRight -> { completion.hide(); doc.moveCaret(0, 1, e.isShiftPressed); return true }
+        Key.DirectionLeft -> {
+            completion.hide()
+            val delta = if (textDirection == TextDir.RTL) 1 else -1
+            doc.moveCaret(0, delta, isShift)
+            return true
+        }
+        Key.DirectionRight -> {
+            completion.hide()
+            val delta = if (textDirection == TextDir.RTL) -1 else 1
+            doc.moveCaret(0, delta, isShift)
+            return true
+        }
         else -> {
             val ch = e.awtEventOrNull?.keyChar
             if (ch != null && ch != CHAR_UNDEFINED && !ch.isISOControl()) {

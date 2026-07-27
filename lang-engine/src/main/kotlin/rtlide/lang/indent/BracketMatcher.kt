@@ -64,3 +64,11 @@ fun newlineIndent(currentLine: String, rules: IndentRules): String {
     val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
     return "\n" + leading + (if (addLevel) unit else "")
 }
+
+fun getAutoCloseTrigger(currentLine: String, rules: IndentRules): String? {
+    val trimmed = currentLine.trim()
+    if (rules.indentTriggers.any { trimmed.endsWith(it) }) {
+        return rules.dedentTriggers.firstOrNull()
+    }
+    return null
+}
