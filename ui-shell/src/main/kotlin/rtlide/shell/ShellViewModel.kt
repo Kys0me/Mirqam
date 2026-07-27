@@ -133,9 +133,12 @@ class ShellViewModel(val scope: CoroutineScope) {
             snapshotFlow { tab.document.text() }.collectLatest { content ->
                 // Run analysis if it's a Sakhr file
                 if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
-                    tab.diagnostics = sakhrAnalyzer.analyze(content)
+                    val result = sakhrAnalyzer.analyze(content)
+                    tab.diagnostics = result.diagnostics
+                    tab.symbols = result.symbols
                 } else {
                     tab.diagnostics = emptyList()
+                    tab.symbols = emptyList()
                 }
                 
                 // Delay auto-save to debounce typing

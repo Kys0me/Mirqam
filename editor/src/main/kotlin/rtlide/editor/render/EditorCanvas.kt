@@ -171,6 +171,10 @@ fun EditorCanvas(
         }
     }
 
+    val allSuggestions = remember(keywords, tab.symbols) {
+        (keywords + tab.symbols).distinct()
+    }
+
     fun applyCompletion() {
         val item = completion.items.getOrNull(completion.selected) ?: return
         val line = doc.lineText(doc.caret.line)
@@ -246,7 +250,7 @@ fun EditorCanvas(
                             }
                         }
                     }
-                    handleKey(event, doc, completion, keywords, indent) { applyCompletion() }
+                    handleKey(event, doc, completion, allSuggestions, indent) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
                 .pointerInput(Unit) {
@@ -664,14 +668,14 @@ fun ProblemTooltip(diag: Diagnostic, selectedIndex: Int, onQuickFix: (rtlide.lan
     }
 }
 
-private fun refreshCompletion(doc: Document, completion: CompletionState, keywords: List<String>) {
+private fun refreshCompletion(doc: Document, completion: CompletionState, suggestions: List<String>) {
     val line = doc.lineText(doc.caret.line)
     val end = doc.caret.col.coerceIn(0, line.length)
     var start = end
     while (start > 0 && (line[start - 1].isLetter() || line[start - 1] == '_')) start--
     val prefix = line.substring(start, end)
     if (prefix.isNotEmpty()) {
-        completion.show(keywords.filter { it.startsWith(prefix) && it != prefix }.take(8))
+        completion.show(suggestions.filter { it.startsWith(prefix) && it != prefix }.take(8))
     } else {
         completion.hide()
     }
@@ -681,7 +685,7 @@ private fun handleKey(
     e: KeyEvent,
     doc: Document,
     completion: CompletionState,
-    keywords: List<String>,
+    suggestions: List<String>,
     indent: IndentRules,
     applyCompletion: () -> Unit,
 ): Boolean {
@@ -702,7 +706,7 @@ private fun handleKey(
             return false
         }
         Key.Backspace -> {
-            doc.backspace(); refreshCompletion(doc, completion, keywords); return true
+            doc.backspace(); refreshCompletion(doc, completion, suggestions); return true
         }
         Key.Tab -> {
             if (completion.visible) { applyCompletion(); return true }
@@ -742,7 +746,7 @@ private fun handleKey(
                 } else {
                     doc.insert(ch.toString())
                 }
-                refreshCompletion(doc, completion, keywords)
+                refreshCompletion(doc, completion, suggestions)
                 return true
             }
             return false

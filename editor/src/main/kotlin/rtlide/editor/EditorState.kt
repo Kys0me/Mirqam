@@ -26,6 +26,7 @@ class EditorTab(
     val highlighter: Highlighter
 ) {
     var diagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
+    var symbols by mutableStateOf<List<String>>(emptyList())
     var hoveredDiagnostic by mutableStateOf<Diagnostic?>(null)
     var instantTooltip by mutableStateOf(false)
     
