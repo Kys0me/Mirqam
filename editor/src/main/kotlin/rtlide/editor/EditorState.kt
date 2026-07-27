@@ -14,6 +14,7 @@ import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Location
 import rtlide.lang.analysis.QuickFix
 import rtlide.lang.highlight.Highlighter
+import rtlide.lang.indent.reformat
 import rtlide.lang.schema.LanguageDefinition
 import rtlide.lang.tokenizer.Tokenizer
 import java.io.File
@@ -166,6 +167,11 @@ class EditorTab(
             hoveredDiagnostic = diag
             instantTooltip = true
         }
+    }
+
+    fun reformat() {
+        val newText = reformat(document.text(), lang.indent)
+        document.replaceFullText(newText)
     }
 }
 

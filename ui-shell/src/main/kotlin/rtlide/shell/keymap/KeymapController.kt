@@ -58,6 +58,7 @@ class KeymapController(private val bindings: Map<Shortcut, String>) {
                 Shortcut(Key.One, alt = true) to "ToggleProjectView",   // Alt+1
                 Shortcut(Key.F12, alt = true) to "ToggleTerminal",       // Alt+F12
                 Shortcut(Key.Escape, shift = true) to "HideAllWindows",  // Shift+Esc
+                Shortcut(Key.L, ctrl = true, alt = true) to "ReformatCode", // Ctrl+Alt+L
                 Shortcut(Key.A, ctrl = true, shift = true) to "FindAction",   // Ctrl+Shift+A
                 Shortcut(Key.F, ctrl = true, shift = true) to "FindInFiles",  // Ctrl+Shift+F
                 Shortcut(Key.N, ctrl = true) to "GoToFile",              // Ctrl+N

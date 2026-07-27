@@ -108,3 +108,39 @@ fun getAutoCloseTrigger(currentLine: String, rules: IndentRules): String? {
     }
     return null
 }
+
+/**
+ * Reformats the entire text block based on IndentRules.
+ * Trims every line and applies indentation based on trigger words.
+ */
+fun reformat(text: String, rules: IndentRules): String {
+    val lines = text.split('\n')
+    val result = mutableListOf<String>()
+    var currentDepth = 0
+    val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
+
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) {
+            result.add("")
+            continue
+        }
+
+        // Dedent if the line starts with a dedent trigger
+        val isDedent = rules.dedentTriggers.any { trimmed.startsWith(it) }
+        if (isDedent) {
+            currentDepth = (currentDepth - 1).coerceAtLeast(0)
+        }
+
+        val indent = unit.repeat(currentDepth)
+        result.add(indent + trimmed)
+
+        // Indent if the line ends with an indent trigger (and was not just a dedent line)
+        val isIndent = rules.indentTriggers.any { trimmed.endsWith(it) }
+        if (isIndent) {
+            currentDepth++
+        }
+    }
+
+    return result.joinToString("\n")
+}

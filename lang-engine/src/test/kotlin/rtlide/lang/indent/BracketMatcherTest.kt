@@ -1,7 +1,7 @@
 package rtlide.lang.indent
 
+import org.junit.Assert.assertEquals
 import org.junit.Test
-import org.junit.Assert.*
 import rtlide.lang.schema.IndentRules
 
 class BracketMatcherTest {
@@ -39,5 +39,47 @@ class BracketMatcherTest {
         assertEquals("\n        \n    انتهى", result.text)
         assertEquals(1, result.caretLineOffset)
         assertEquals(8, result.caretColOffset)
+    }
+
+    @Test
+    fun testReformat() {
+        val input = """
+ابدأ
+أكتب("1")
+أكتب("2")
+انتهى
+""".trimIndent()
+
+        val expected = """
+ابدأ
+    أكتب("1")
+    أكتب("2")
+انتهى
+""".trimIndent()
+
+        assertEquals(expected, reformat(input, rules))
+    }
+
+    @Test
+    fun testReformat_Nested() {
+        val input = """
+ابدأ
+أكتب("خارج")
+ابدأ
+أكتب("داخل")
+انتهى
+انتهى
+""".trimIndent()
+
+        val expected = """
+ابدأ
+    أكتب("خارج")
+    ابدأ
+        أكتب("داخل")
+    انتهى
+انتهى
+""".trimIndent()
+
+        assertEquals(expected, reformat(input, rules))
     }
 }

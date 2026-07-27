@@ -85,6 +85,7 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
         keymap.bind("NextProblem") { vm.editorState.gotoNextProblem() }
         keymap.bind("PrevProblem") { vm.editorState.gotoPreviousProblem() }
         keymap.bind("ShowIntentionActions") { vm.editorState.activeTab?.showIntentionActions() }
+        keymap.bind("ReformatCode") { vm.editorState.activeTab?.reformat() }
     }
 
     if (vm.currentProject == null && vm.editorState.tabs.isEmpty()) {

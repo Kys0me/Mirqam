@@ -294,6 +294,14 @@ class Document(initial: String = "") {
         redoStack.clear()
     }
 
+    /** Replace the entire document content, preserving undo history. */
+    fun replaceFullText(newText: String) {
+        pushUndo()
+        lines = splitLines(newText)
+        caret = Caret(0, 0)
+        selectionAnchor = null
+    }
+
     private fun splitLines(s: String): List<String> =
         if (s.isEmpty()) listOf("") else s.split('\n')
 }
