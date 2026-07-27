@@ -65,6 +65,42 @@ fun newlineIndent(currentLine: String, rules: IndentRules): String {
     return "\n" + leading + (if (addLevel) unit else "")
 }
 
+/**
+ * Data class representing the result of a "Smart Enter" operation.
+ * [text] is the full string to insert at the current caret position.
+ * [caretLineOffset] is how many lines to move the caret relative to its current line.
+ * [caretColOffset] is the absolute column index for the caret in its new line.
+ */
+data class SmartEnterResult(
+    val text: String,
+    val caretLineOffset: Int,
+    val caretColOffset: Int
+)
+
+/**
+ * Combines indentation and auto-closing into a single atomic result to prevent
+ * transient document states that could trigger false positive analysis errors.
+ */
+fun calculateSmartEnter(currentLine: String, rules: IndentRules): SmartEnterResult {
+    val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
+    val trimmed = currentLine.trim()
+    val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
+    
+    val isTriggered = rules.indentTriggers.any { trimmed.endsWith(it) }
+    val autoClose = if (isTriggered) rules.dedentTriggers.firstOrNull() else null
+
+    return if (autoClose != null) {
+        // Atomic block creation: indent + caret line + closing line
+        val text = "\n$leading$unit\n$leading$autoClose"
+        SmartEnterResult(text, caretLineOffset = 1, caretColOffset = (leading + unit).length)
+    } else {
+        // Just standard indentation
+        val addLevel = rules.indentTriggers.any { currentLine.trimEnd().endsWith(it) }
+        val text = "\n" + leading + (if (addLevel) unit else "")
+        SmartEnterResult(text, caretLineOffset = 1, caretColOffset = (leading + (if (addLevel) unit else "")).length)
+    }
+}
+
 fun getAutoCloseTrigger(currentLine: String, rules: IndentRules): String? {
     val trimmed = currentLine.trim()
     if (rules.indentTriggers.any { trimmed.endsWith(it) }) {

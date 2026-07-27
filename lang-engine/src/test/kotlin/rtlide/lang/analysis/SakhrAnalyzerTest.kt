@@ -9,14 +9,14 @@ class SakhrAnalyzerTest {
     @Test
     fun testSyntaxError() {
         val source = "ليكن س = "
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         assertTrue(diagnostics.any { it.severity == Severity.Error })
     }
 
     @Test
     fun testUnusedVariableWarning() {
         val source = "ليكن س = 10"
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         assertTrue(diagnostics.any { it.severity == Severity.Warning && it.message.contains("غير مستخدم") })
     }
 
@@ -26,7 +26,7 @@ class SakhrAnalyzerTest {
             ليكن س = 10
             أكتب(س)
         """.trimIndent()
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         assertTrue(diagnostics.any { it.severity == Severity.Warning && it.message.contains("ألزم") })
     }
 
@@ -37,7 +37,7 @@ class SakhrAnalyzerTest {
             س = 20
             أكتب(س)
         """.trimIndent()
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         // No warnings for unused or "can be val"
         assertTrue(diagnostics.none { it.severity == Severity.Warning })
     }
@@ -45,7 +45,7 @@ class SakhrAnalyzerTest {
     @Test
     fun testEnforcedInitialization() {
         val source = "ليكن س"
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         assertTrue(diagnostics.any { it.severity == Severity.Error && it.message.contains("تعيين قيمة ابتدائية") })
         assertTrue(diagnostics.any { it.fixes.any { fix -> fix.replacement == "ADD_INITIALIZER" } })
     }
@@ -56,7 +56,7 @@ class SakhrAnalyzerTest {
             ألزم س = 10
             س = 20
         """.trimIndent()
-        val diagnostics = analyzer.analyze(source)
+        val diagnostics = analyzer.analyze(source).diagnostics
         assertTrue(diagnostics.any { it.severity == Severity.Error && it.message.contains("ألزم") })
         assertTrue(diagnostics.any { it.fixes.any { fix -> fix.replacement == "CHANGE_TO_VAR" } })
     }
@@ -75,7 +75,7 @@ class SakhrAnalyzerTest {
                 رجع
             انتهى
         """.trimIndent()
-        val diagsUnused = analyzer.analyze(sourceUnused)
+        val diagsUnused = analyzer.analyze(sourceUnused).diagnostics
         assertTrue(diagsUnused.none { it.severity == Severity.Warning }, "Should have no warnings for parameters")
     }
 
@@ -91,7 +91,7 @@ class SakhrAnalyzerTest {
                 رجع أ
             انتهى
         """.trimIndent()
-        val diags = analyzer.analyze(source)
+        val diags = analyzer.analyze(source).diagnostics
         
         // Filter for Information to be safe
         val infoDiags = diags.filter { it.severity == Severity.Information }

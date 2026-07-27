@@ -95,8 +95,7 @@ import rtlide.editor.intelligence.CompletionState
 import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Severity
 import rtlide.lang.indent.Brackets
-import rtlide.lang.indent.getAutoCloseTrigger
-import rtlide.lang.indent.newlineIndent
+import rtlide.lang.indent.calculateSmartEnter
 import rtlide.lang.schema.IndentRules
 import rtlide.lang.schema.TextDir
 import java.awt.event.KeyEvent.CHAR_UNDEFINED
@@ -762,15 +761,10 @@ private fun handleKey(
         Key.Enter -> {
             if (completion.visible) { applyCompletion(); return true }
             val currentLine = doc.lineText(doc.caret.line)
-            val autoClose = getAutoCloseTrigger(currentLine, indent)
-            val indentStr = newlineIndent(currentLine, indent)
-            doc.insert(indentStr)
-            if (autoClose != null) {
-                val (l, c) = doc.caret
-                val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
-                doc.insert("\n" + leading + autoClose)
-                doc.caret = Caret(l, c)
-            }
+            val startLine = doc.caret.line
+            val result = calculateSmartEnter(currentLine, indent)
+            doc.insert(result.text)
+            doc.caret = Caret(startLine + result.caretLineOffset, result.caretColOffset)
             completion.hide(); return true
         }
         Key.DirectionUp -> {
