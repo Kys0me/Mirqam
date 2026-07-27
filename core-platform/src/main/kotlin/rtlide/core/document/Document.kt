@@ -23,6 +23,10 @@ data class Caret(val line: Int, val col: Int)
 @Stable
 class Document(initial: String = "") {
 
+    private data class DocumentState(val lines: List<String>, val caret: Caret)
+    private val undoStack = mutableListOf<DocumentState>()
+    private val redoStack = mutableListOf<DocumentState>()
+
     var lines by mutableStateOf(splitLines(initial))
         private set
 
@@ -34,10 +38,39 @@ class Document(initial: String = "") {
 
     fun text(): String = lines.joinToString("\n")
 
+    private fun pushUndo() {
+        undoStack.add(DocumentState(lines, caret))
+        if (undoStack.size > 100) undoStack.removeAt(0)
+        redoStack.clear()
+    }
+
+    fun undo() {
+        if (undoStack.isNotEmpty()) {
+            val currentState = DocumentState(lines, caret)
+            redoStack.add(currentState)
+            val prevState = undoStack.removeAt(undoStack.size - 1)
+            lines = prevState.lines
+            caret = prevState.caret
+            selectionAnchor = null
+        }
+    }
+
+    fun redo() {
+        if (redoStack.isNotEmpty()) {
+            val currentState = DocumentState(lines, caret)
+            undoStack.add(currentState)
+            val nextState = redoStack.removeAt(redoStack.size - 1)
+            lines = nextState.lines
+            caret = nextState.caret
+            selectionAnchor = null
+        }
+    }
+
     /** Insert [textToInsert] at the caret. Handles embedded newlines. */
     fun insert(textToInsert: String) {
-        if (hasSelection) deleteSelection()
         if (textToInsert.isEmpty()) return
+        pushUndo()
+        if (hasSelection) deleteSelectionInternal()
         val (l, c) = caret
         val current = lineText(l)
         val safeCol = c.coerceIn(0, current.length)
@@ -62,11 +95,14 @@ class Document(initial: String = "") {
     /** Delete the character before the caret, merging lines at column 0. */
     fun backspace() {
         if (hasSelection) {
-            deleteSelection()
+            pushUndo()
+            deleteSelectionInternal()
             return
         }
         val (l, c) = caret
         val current = lineText(l)
+        if (l == 0 && c == 0) return
+        pushUndo()
         val next = lines.toMutableList()
         when {
             c > 0 -> {
@@ -122,6 +158,13 @@ class Document(initial: String = "") {
     }
 
     fun deleteSelection() {
+        if (hasSelection) {
+            pushUndo()
+            deleteSelectionInternal()
+        }
+    }
+
+    private fun deleteSelectionInternal() {
         val (start, end) = getSelectionRange() ?: return
         val next = lines.toMutableList()
         val startLine = lineText(start.line)
@@ -150,7 +193,6 @@ class Document(initial: String = "") {
     }
 
     fun paste() {
-        if (hasSelection) deleteSelection()
         val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
         val text = contents?.getTransferData(DataFlavor.stringFlavor) as? String ?: return
         insert(text)
@@ -166,6 +208,8 @@ class Document(initial: String = "") {
         lines = splitLines(newText)
         caret = Caret(0, 0)
         selectionAnchor = null
+        undoStack.clear()
+        redoStack.clear()
     }
 
     private fun splitLines(s: String): List<String> =

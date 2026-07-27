@@ -61,6 +61,10 @@ class KeymapController(private val bindings: Map<Shortcut, String>) {
                 Shortcut(Key.A, ctrl = true, shift = true) to "FindAction",   // Ctrl+Shift+A
                 Shortcut(Key.F, ctrl = true, shift = true) to "FindInFiles",  // Ctrl+Shift+F
                 Shortcut(Key.N, ctrl = true) to "GoToFile",              // Ctrl+N
+                Shortcut(Key.Z, ctrl = true) to "Undo",
+                Shortcut(Key.Y, ctrl = true) to "Redo",
+                Shortcut(Key.Z, ctrl = true, shift = true) to "Redo",
+                Shortcut(Key.W, ctrl = true) to "CloseTab",
             )
         )
     }

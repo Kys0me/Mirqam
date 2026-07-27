@@ -18,13 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import rtlide.components.filepicker.ComposeFileDialog
 import rtlide.components.filepicker.FilePickerState
-import rtlide.core.document.Document
 import rtlide.core.project.Project
 import rtlide.core.project.RecentProjectsStore
 import rtlide.editor.EditorArea
-import rtlide.lang.SakhrLang
-import rtlide.lang.highlight.Highlighter
-import rtlide.lang.tokenizer.Tokenizer
 import rtlide.shell.frame.HorizontalResizer
 import rtlide.shell.frame.MainToolbar
 import rtlide.shell.frame.StatusBar
@@ -36,38 +32,17 @@ import rtlide.shell.toolwindow.ProjectToolWindow
 import rtlide.shell.toolwindow.Stripe
 import rtlide.shell.toolwindow.ToolWindowId
 import rtlide.shell.toolwindow.ToolWindowStripe
-import rtlide.terminal.pty.ShellProcessBackend
 import rtlide.terminal.ui.TerminalPanel
-import java.io.File
 
 /**
- * The IntelliJ-style IDE frame. Because the whole tree runs under
- * LayoutDirection.Rtl (set in Main), the project panel resolves to the RIGHT,
- * the editor centers, and the terminal docks at the bottom — a mirrored
- * IntelliJ, achieved by layout semantics rather than hard-coded coordinates.
+ * The IntelliJ-style IDE frame.
  */
 @Composable
 fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
     val layout = remember { IdeLayoutState() }
     val scope = rememberCoroutineScope()
-    val terminalBackend = remember { ShellProcessBackend(scope) }
+    val vm = remember { ShellViewModel(scope) }
 
-    var currentProject by remember { mutableStateOf<Project?>(null) }
-    var activeFile by remember { mutableStateOf<File?>(null) }
-
-    val lang = remember(activeFile) {
-        // Currently only Sakhr is supported as a first-class citizen.
-        SakhrLang.definition()
-    }
-    val theme = remember(activeFile) {
-        SakhrLang.theme()
-    }
-    val highlighter = remember(lang, theme) {
-        Highlighter(Tokenizer(lang.grammar), theme)
-    }
-    
-    val doc = remember { Document(SakhrLang.SAMPLE_CODE) }
-    
     var showFileDialog by remember { mutableStateOf(false) }
     val filePickerState = remember {
         FilePickerState(onFileSelected = { file ->
@@ -75,34 +50,30 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                 if (file.isDirectory) {
                     val project = Project(file.name, file.absolutePath)
                     RecentProjectsStore.addProject(project)
-                    currentProject = project
+                    vm.openProject(project)
                 } else {
-                    activeFile = file
-                    doc.setText(file.readText())
+                    vm.openFile(file)
                 }
             }
             showFileDialog = false
         })
     }
 
-    LaunchedEffect(Unit) {
-        terminalBackend.start()
-    }
-
-    LaunchedEffect(keymap, layout) {
+    LaunchedEffect(keymap, layout, vm) {
         keymap.bind("ToggleProjectView") { layout.toggle(ToolWindowId.Project) }
         keymap.bind("ToggleTerminal") { layout.toggle(ToolWindowId.Terminal) }
         keymap.bind("HideAllWindows") { layout.hideAllToolWindows() }
+        
+        keymap.bind("Undo") { vm.editorState.activeTab?.document?.undo() }
+        keymap.bind("Redo") { vm.editorState.activeTab?.document?.redo() }
+        keymap.bind("CloseTab") { vm.editorState.closeActiveTab() }
     }
 
-    if (currentProject == null && activeFile == null) {
+    if (vm.currentProject == null && vm.editorState.tabs.isEmpty()) {
         WelcomeView(
             onNewProject = { showFileDialog = true },
             onOpenProject = { showFileDialog = true },
-            onProjectSelected = { 
-                println("Project selected from welcome: ${it.path}")
-                currentProject = it 
-            },
+            onProjectSelected = { vm.openProject(it) },
             modifier = modifier
         )
     } else {
@@ -111,15 +82,16 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                 onOpenFile = { showFileDialog = true },
                 onOpenProject = { showFileDialog = true },
                 onRun = {
-                    val file = activeFile
-                    if (file != null) {
+                    val tab = vm.editorState.activeTab
+                    if (tab != null) {
+                        val file = tab.file
                         val cmd = if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
                             "sakhr شغل \"${file.absolutePath}\""
                         } else {
                             "echo \"لا توجد تهيئة تشغيل لهذه اللغة حالياً.\""
                         }
                         layout.show(ToolWindowId.Terminal)
-                        terminalBackend.write(cmd + "\n")
+                        vm.terminalBackend.write(cmd + "\n")
                     }
                 },
                 Modifier.fillMaxWidth().height(36.dp)
@@ -129,28 +101,30 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                 ToolWindowStripe(Stripe.Start, layout)
 
                 if (layout.isVisible(ToolWindowId.Project)) {
-                    ProjectToolWindow(currentProject, onFileSelected = { file ->
-                        println("File selected from tree: ${file.absolutePath}")
-                        activeFile = file
-                        val content = file.readText()
-                        println("File content length: ${content.length}")
-                        doc.setText(content)
+                    ProjectToolWindow(vm.currentProject, onFileSelected = { file ->
+                        vm.openFile(file)
                     }, Modifier.width(layout.startWidth))
                     VerticalResizer(onDrag = { layout.resizeStart(it) })
                 }
 
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    EditorArea(activeFile?.name ?: "بدون عنوان", doc, highlighter, lang, Modifier.weight(1f).fillMaxWidth())
+                    EditorArea(vm.editorState, Modifier.weight(1f).fillMaxWidth())
 
                     if (layout.isVisible(ToolWindowId.Terminal)) {
                         HorizontalResizer(onDrag = { layout.resizeBottom(it) })
-                        TerminalPanel(terminalBackend, Modifier.height(layout.bottomHeight).fillMaxWidth())
+                        TerminalPanel(vm.terminalBackend, Modifier.height(layout.bottomHeight).fillMaxWidth())
                     }
                 }
             }
 
             ToolWindowStripe(Stripe.Bottom, layout)
-            StatusBar(doc.caret.line, doc.caret.col, lang.displayName, Modifier.fillMaxWidth().height(24.dp))
+            
+            val activeTab = vm.editorState.activeTab
+            val line = activeTab?.document?.caret?.line ?: 0
+            val col = activeTab?.document?.caret?.col ?: 0
+            val langName = activeTab?.lang?.displayName ?: "لا يوجد"
+            
+            StatusBar(line, col, langName, Modifier.fillMaxWidth().height(24.dp))
         }
     }
     

@@ -19,54 +19,69 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import rtlide.core.document.Document
 import rtlide.core.theme.IdeColors
 import rtlide.editor.render.EditorCanvas
-import rtlide.lang.highlight.Highlighter
-import rtlide.lang.schema.LanguageDefinition
 
 /** The center editor area: a simple tab strip plus the custom RTL canvas. */
 @Composable
 fun EditorArea(
-    fileName: String,
-    doc: Document,
-    highlighter: Highlighter,
-    lang: LanguageDefinition,
+    state: EditorState,
     modifier: Modifier = Modifier,
 ) {
-    val keywords = remember(lang) {
-        (lang.grammar.controlKeywords + lang.grammar.keywords + lang.grammar.builtins + lang.grammar.constants)
-            .distinct()
-    }
+    val activeTab = state.activeTab
     Column(modifier.background(IdeColors.GutterBackground)) {
-        EditorTabBar(fileName)
-        EditorCanvas(
-            doc = doc,
-            highlighter = highlighter,
-            keywords = keywords,
-            brackets = lang.brackets,
-            indent = lang.indent,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
+        EditorTabBar(state)
+        if (activeTab != null) {
+            val keywords = remember(activeTab.lang) {
+                (activeTab.lang.grammar.controlKeywords + activeTab.lang.grammar.keywords + activeTab.lang.grammar.builtins + activeTab.lang.grammar.constants)
+                    .distinct()
+            }
+            EditorCanvas(
+                doc = activeTab.document,
+                highlighter = activeTab.highlighter,
+                keywords = keywords,
+                brackets = activeTab.lang.brackets,
+                indent = activeTab.lang.indent,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        } else {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("لا توجد ملفات مفتوحة", color = IdeColors.TextMuted)
+            }
+        }
     }
 }
 
 @Composable
-private fun EditorTabBar(fileName: String) {
+private fun EditorTabBar(state: EditorState) {
     Row(
         Modifier.fillMaxWidth().background(IdeColors.TabInactiveBackground),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .background(IdeColors.TabActiveBackground)
-                .border(width = 1.dp, color = IdeColors.BorderColor, shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(fileName, color = IdeColors.TextDefault, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.width(8.dp))
-                Text("×", color = IdeColors.TextMuted, fontSize = 16.sp, modifier = Modifier.clickable {  })
+        state.tabs.forEachIndexed { index, tab ->
+            val isActive = state.activeTabIndex == index
+            Box(
+                Modifier
+                    .background(if (isActive) IdeColors.TabActiveBackground else IdeColors.TabInactiveBackground)
+                    .border(width = 1.dp, color = IdeColors.BorderColor, shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                    .clickable { state.activeTabIndex = index }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        tab.file.name,
+                        color = if (isActive) IdeColors.TextDefault else IdeColors.TextMuted,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "×",
+                        color = IdeColors.TextMuted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.clickable { state.closeTab(index) }
+                    )
+                }
             }
         }
         Spacer(Modifier.weight(1f))
