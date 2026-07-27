@@ -1,0 +1,173 @@
+package rtlide.core.document
+
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+
+/** Logical caret: a line index + a character offset (column) inside that line.
+ *  Everything in the editor is expressed in LOGICAL coordinates; visual/Bidi
+ *  geometry is derived from the text layout, never stored here. */
+data class Caret(val line: Int, val col: Int)
+
+/**
+ * Minimal line-based document backed by Compose snapshot state, so any mutation
+ * recomposes the editor. This is deliberately simple; the public surface
+ * (lines / caret / insert / backspace / moveCaret) is what the rest of the
+ * project depends on, so it can be swapped for a piece-table / rope later
+ * without touching the UI.
+ */
+@Stable
+class Document(initial: String = "") {
+
+    var lines by mutableStateOf(splitLines(initial))
+        private set
+
+    var caret by mutableStateOf(Caret(0, 0))
+
+    var selectionAnchor by mutableStateOf<Caret?>(null)
+
+    fun lineText(index: Int): String = lines.getOrElse(index) { "" }
+
+    fun text(): String = lines.joinToString("\n")
+
+    /** Insert [textToInsert] at the caret. Handles embedded newlines. */
+    fun insert(textToInsert: String) {
+        if (hasSelection) deleteSelection()
+        if (textToInsert.isEmpty()) return
+        val (l, c) = caret
+        val current = lineText(l)
+        val safeCol = c.coerceIn(0, current.length)
+        val next = lines.toMutableList()
+        if ('\n' in textToInsert) {
+            val merged = current.substring(0, safeCol) + textToInsert + current.substring(safeCol)
+            val pieces = splitLines(merged)
+            next.removeAt(l)
+            next.addAll(l, pieces)
+            lines = next
+            val lastPiece = pieces.last()
+            val tailLen = current.length - safeCol
+            caret = Caret(l + pieces.size - 1, (lastPiece.length - tailLen).coerceAtLeast(0))
+        } else {
+            next[l] = current.substring(0, safeCol) + textToInsert + current.substring(safeCol)
+            lines = next
+            caret = Caret(l, safeCol + textToInsert.length)
+        }
+        selectionAnchor = null
+    }
+
+    /** Delete the character before the caret, merging lines at column 0. */
+    fun backspace() {
+        if (hasSelection) {
+            deleteSelection()
+            return
+        }
+        val (l, c) = caret
+        val current = lineText(l)
+        val next = lines.toMutableList()
+        when {
+            c > 0 -> {
+                val safeCol = c.coerceIn(1, current.length)
+                next[l] = current.removeRange(safeCol - 1, safeCol)
+                lines = next
+                caret = Caret(l, safeCol - 1)
+            }
+            l > 0 -> {
+                val prev = lineText(l - 1)
+                next[l - 1] = prev + current
+                next.removeAt(l)
+                lines = next
+                caret = Caret(l - 1, prev.length)
+            }
+        }
+        selectionAnchor = null
+    }
+
+    fun moveCaret(deltaLine: Int, deltaCol: Int, extendSelection: Boolean) {
+        if (extendSelection && selectionAnchor == null) selectionAnchor = caret
+        if (!extendSelection) selectionAnchor = null
+        val line = (caret.line + deltaLine).coerceIn(0, (lines.size - 1).coerceAtLeast(0))
+        val col = (caret.col + deltaCol).coerceIn(0, lineText(line).length)
+        caret = Caret(line, col)
+    }
+
+    val hasSelection: Boolean get() = selectionAnchor != null && selectionAnchor != caret
+
+    fun getSelectionRange(): Pair<Caret, Caret>? {
+        val anchor = selectionAnchor ?: return null
+        if (anchor == caret) return null
+        return if (anchor.line < caret.line || (anchor.line == caret.line && anchor.col < caret.col)) {
+            anchor to caret
+        } else {
+            caret to anchor
+        }
+    }
+
+    fun getSelectedText(): String? {
+        val (start, end) = getSelectionRange() ?: return null
+        return if (start.line == end.line) {
+            lineText(start.line).substring(start.col, end.col)
+        } else {
+            val sb = StringBuilder()
+            sb.append(lineText(start.line).substring(start.col)).append("\n")
+            for (i in (start.line + 1) until end.line) {
+                sb.append(lineText(i)).append("\n")
+            }
+            sb.append(lineText(end.line).substring(0, end.col))
+            sb.toString()
+        }
+    }
+
+    fun deleteSelection() {
+        val (start, end) = getSelectionRange() ?: return
+        val next = lines.toMutableList()
+        val startLine = lineText(start.line)
+        val endLine = lineText(end.line)
+        
+        val mergedLine = startLine.substring(0, start.col) + endLine.substring(end.col)
+        
+        for (i in end.line downTo start.line + 1) {
+            next.removeAt(i)
+        }
+        next[start.line] = mergedLine
+        lines = next
+        caret = start
+        selectionAnchor = null
+    }
+
+    fun copySelection() {
+        val text = getSelectedText() ?: return
+        val selection = StringSelection(text)
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
+    }
+
+    fun cutSelection() {
+        copySelection()
+        deleteSelection()
+    }
+
+    fun paste() {
+        if (hasSelection) deleteSelection()
+        val contents = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        val text = contents?.getTransferData(DataFlavor.stringFlavor) as? String ?: return
+        insert(text)
+    }
+
+    fun selectAll() {
+        selectionAnchor = Caret(0, 0)
+        caret = Caret((lines.size - 1).coerceAtLeast(0), lineText((lines.size - 1).coerceAtLeast(0)).length)
+    }
+
+    /** Replace the entire document content. */
+    fun setText(newText: String) {
+        lines = splitLines(newText)
+        caret = Caret(0, 0)
+        selectionAnchor = null
+    }
+
+    private fun splitLines(s: String): List<String> =
+        if (s.isEmpty()) listOf("") else s.split('\n')
+}
