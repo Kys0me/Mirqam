@@ -240,8 +240,20 @@ class EditorTab(
     }
 
     fun reformat() {
-        val newText = reformat(document.text(), lang.indent)
+        val oldText = document.text()
+        val newText = reformat(
+            oldText,
+            lang.indent,
+            lineComment = lang.grammar.lineComment,
+            stringDelimiters = lang.grammar.strings.mapNotNull { it.begin.firstOrNull() }.ifEmpty { listOf('"') },
+        )
+        if (newText == oldText) return
+        // Reformat preserves the line count, so keep the caret on its line.
+        val caretBefore = document.caret
         document.replaceFullText(newText)
+        val line = caretBefore.line.coerceIn(0, document.lines.lastIndex)
+        val col = caretBefore.col.coerceIn(0, document.lineText(line).length)
+        document.caret = rtlide.core.document.Caret(line, col)
     }
 }
 

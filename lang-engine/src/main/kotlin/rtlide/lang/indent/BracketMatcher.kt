@@ -54,16 +54,96 @@ object Brackets {
     }
 }
 
-/** RTL-agnostic auto-indent: preserve the current line's leading whitespace and
- *  add one level after an indent trigger (e.g. "{"). Returns the string to
- *  insert in place of a bare newline. */
-fun newlineIndent(currentLine: String, rules: IndentRules): String {
-    val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
-    val trimmed = currentLine.trimEnd()
-    val addLevel = rules.indentTriggers.any { trimmed.endsWith(it) }
-    val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
-    return "\n" + leading + (if (addLevel) unit else "")
+// ---------------------------------------------------------------------------
+// Token-aware line scanning
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of masking a text: string-literal contents and line comments are
+ * replaced by spaces so that trigger words inside them are invisible to the
+ * indent logic, while every line keeps its original length and the string
+ * delimiters themselves stay in place.
+ */
+internal class MaskedText(
+    val lines: List<String>,
+    /** inString[i] == true means line i STARTS inside a multi-line string.
+     *  Size is lines.size + 1; the last entry is the state after the final line. */
+    val inString: List<Boolean>,
+)
+
+/** Masks string contents and line comments with spaces, tracking multi-line
+ *  strings across lines (Sakhr strings may span newlines and have no escapes). */
+internal fun maskText(
+    lines: List<String>,
+    lineComment: String = "//",
+    stringDelimiters: List<Char> = listOf('"'),
+): MaskedText {
+    val masked = ArrayList<String>(lines.size)
+    val inString = ArrayList<Boolean>(lines.size + 1)
+    var stringChar: Char? = null // non-null while inside a (possibly multi-line) string
+    for (line in lines) {
+        inString.add(stringChar != null)
+        val sb = StringBuilder(line.length)
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
+            if (stringChar != null) {
+                if (ch == stringChar) { stringChar = null; sb.append(ch) } else sb.append(' ')
+                i++
+                continue
+            }
+            if (lineComment.isNotEmpty() && line.startsWith(lineComment, i)) {
+                repeat(line.length - i) { sb.append(' ') }
+                break
+            }
+            if (ch in stringDelimiters) {
+                stringChar = ch
+                sb.append(ch)
+                i++
+                continue
+            }
+            sb.append(ch)
+            i++
+        }
+        masked.add(sb.toString())
+    }
+    inString.add(stringChar != null)
+    return MaskedText(masked, inString)
 }
+
+private fun Char.isWordChar(): Boolean = this == '_' || isLetterOrDigit()
+
+/** Counts whole-word occurrences of [word] in [text]; identifiers that merely
+ *  contain the word (e.g. "ابدأها" vs "ابدأ") do not match. */
+internal fun countWordOccurrences(text: String, word: String): Int {
+    if (word.isEmpty()) return 0
+    var count = 0
+    var idx = text.indexOf(word)
+    while (idx >= 0) {
+        val before = text.getOrNull(idx - 1)
+        val after = text.getOrNull(idx + word.length)
+        if ((before == null || !before.isWordChar()) && (after == null || !after.isWordChar())) count++
+        idx = text.indexOf(word, idx + 1)
+    }
+    return count
+}
+
+internal fun startsWithWord(text: String, word: String): Boolean {
+    if (!text.startsWith(word)) return false
+    val after = text.getOrNull(word.length)
+    return after == null || !after.isWordChar()
+}
+
+internal fun endsWithWord(text: String, word: String): Boolean {
+    val t = text.trimEnd()
+    if (!t.endsWith(word)) return false
+    val before = t.getOrNull(t.length - word.length - 1)
+    return before == null || !before.isWordChar()
+}
+
+// ---------------------------------------------------------------------------
+// Smart Enter
+// ---------------------------------------------------------------------------
 
 /**
  * Data class representing the result of a "Smart Enter" operation.
@@ -80,43 +160,39 @@ data class SmartEnterResult(
 /**
  * Combines indentation and auto-closing into a single atomic result to prevent
  * transient document states that could trigger false positive analysis errors.
+ *
+ * Token-aware: trigger words inside strings, comments, or larger identifiers
+ * never fire. Auto-close is decided by the whole-document open/close balance,
+ * so nested blocks whose closer belongs to an outer block still auto-close.
  */
-fun calculateSmartEnter(currentLine: String, rules: IndentRules, fullText: String = "", lineIndex: Int = -1): SmartEnterResult {
+fun calculateSmartEnter(
+    currentLine: String,
+    rules: IndentRules,
+    fullText: String = "",
+    lineIndex: Int = -1,
+    lineComment: String = "//",
+    stringDelimiters: List<Char> = listOf('"'),
+): SmartEnterResult {
     val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
-    val trimmed = currentLine.trim()
     val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
-    
-    val isTriggered = rules.indentTriggers.any { trimmed.endsWith(it) }
-    
-    // Smart auto-close: check if we already have a matching closing tag for the current scope level
-    var autoClose: String? = null
-    if (isTriggered) {
-        val trigger = rules.indentTriggers.find { trimmed.endsWith(it) }
-        val closing = rules.dedentTriggers.firstOrNull() // Heuristic: first dedent trigger matches first indent trigger
-        
-        if (closing != null && fullText.isNotEmpty() && lineIndex != -1) {
-            val lines = fullText.split('\n')
-            var balance = 0
-            // Count balance starting from the line AFTER the current one
-            for (i in (lineIndex + 1) until lines.size) {
-                val l = lines[i].trim()
-                if (rules.indentTriggers.any { l.contains(it) }) balance++
-                if (rules.dedentTriggers.any { l.contains(it) }) balance--
-                
-                // If we found a matching closing tag that isn't already "claimed" by another opening tag
-                if (balance < 0) {
-                    // There is already a closing tag available for this block
-                    break
-                }
-            }
-            
-            if (balance >= 0) {
-                autoClose = closing
-            }
-        } else if (closing != null) {
-            // Fallback for simple cases
-            autoClose = closing
+
+    val maskedCurrent = maskText(listOf(currentLine), lineComment, stringDelimiters).lines[0]
+    val isTriggered = rules.indentTriggers.any { endsWithWord(maskedCurrent, it) }
+    if (!isTriggered) {
+        return SmartEnterResult("\n$leading", caretLineOffset = 1, caretColOffset = leading.length)
+    }
+
+    var autoClose: String? = rules.dedentTriggers.firstOrNull()
+    if (autoClose != null && fullText.isNotEmpty() && lineIndex >= 0) {
+        // Whole-document balance: the just-typed opener is already in fullText,
+        // so a positive balance means one closer is genuinely missing.
+        val masked = maskText(fullText.split('\n'), lineComment, stringDelimiters)
+        var balance = 0
+        for (l in masked.lines) {
+            balance += rules.indentTriggers.sumOf { countWordOccurrences(l, it) }
+            balance -= rules.dedentTriggers.sumOf { countWordOccurrences(l, it) }
         }
+        if (balance <= 0) autoClose = null
     }
 
     return if (autoClose != null) {
@@ -124,52 +200,88 @@ fun calculateSmartEnter(currentLine: String, rules: IndentRules, fullText: Strin
         val text = "\n$leading$unit\n$leading$autoClose"
         SmartEnterResult(text, caretLineOffset = 1, caretColOffset = (leading + unit).length)
     } else {
-        // Just standard indentation
-        val addLevel = rules.indentTriggers.any { currentLine.trimEnd().endsWith(it) }
-        val text = "\n" + leading + (if (addLevel) unit else "")
-        SmartEnterResult(text, caretLineOffset = 1, caretColOffset = (leading + (if (addLevel) unit else "")).length)
+        val text = "\n$leading$unit"
+        SmartEnterResult(text, caretLineOffset = 1, caretColOffset = (leading + unit).length)
     }
 }
 
-fun getAutoCloseTrigger(currentLine: String, rules: IndentRules): String? {
-    val trimmed = currentLine.trim()
-    if (rules.indentTriggers.any { trimmed.endsWith(it) }) {
-        return rules.dedentTriggers.firstOrNull()
-    }
-    return null
-}
+// ---------------------------------------------------------------------------
+// Reformat
+// ---------------------------------------------------------------------------
 
 /**
- * Reformats the entire text block based on IndentRules.
- * Trims every line and applies indentation based on trigger words.
+ * Reformats the entire text based on IndentRules.
+ *
+ * Token-aware line re-indenter:
+ *  - trigger words inside strings, line comments, or larger identifiers are ignored;
+ *  - lines inside a multi-line string are emitted verbatim;
+ *  - end/begin chains like "انتهى وإلا ابدأ" keep the parent indent;
+ *  - lines inside an unclosed "(" or "[" get one continuation indent level.
+ *
+ * Output always has the same number of lines as the input.
  */
-fun reformat(text: String, rules: IndentRules): String {
+fun reformat(
+    text: String,
+    rules: IndentRules,
+    lineComment: String = "//",
+    stringDelimiters: List<Char> = listOf('"'),
+): String {
     val lines = text.split('\n')
-    val result = mutableListOf<String>()
-    var currentDepth = 0
+    val masked = maskText(lines, lineComment, stringDelimiters)
     val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
+    val result = ArrayList<String>(lines.size)
+    var depth = 0
+    var bracketDepth = 0
 
-    for (line in lines) {
-        val trimmed = line.trim()
-        if (trimmed.isEmpty()) {
+    fun updateBracketDepth(maskedLine: String) {
+        for (ch in maskedLine) when (ch) {
+            '(', '[' -> bracketDepth++
+            ')', ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+        }
+    }
+
+    for ((i, line) in lines.withIndex()) {
+        // Lines that begin inside a multi-line string must not be touched.
+        if (masked.inString[i]) {
+            result.add(line)
+            updateBracketDepth(masked.lines[i])
+            continue
+        }
+
+        val stringOpenAtEnd = masked.inString[i + 1]
+        // Trailing whitespace of a line that opens a multi-line string belongs
+        // to the string literal — only strip the leading indentation then.
+        val body = if (stringOpenAtEnd) line.trimStart() else line.trim()
+        if (body.isEmpty()) {
             result.add("")
             continue
         }
 
-        // Dedent if the line starts with a dedent trigger
-        val isDedent = rules.dedentTriggers.any { trimmed.startsWith(it) }
-        if (isDedent) {
-            currentDepth = (currentDepth - 1).coerceAtLeast(0)
+        val maskedTrimmed = masked.lines[i].trim()
+        val opens = rules.indentTriggers.sumOf { countWordOccurrences(maskedTrimmed, it) }
+        val closes = rules.dedentTriggers.sumOf { countWordOccurrences(maskedTrimmed, it) }
+
+        // Count dedent triggers leading the line ("انتهى" or "انتهى وإلا ابدأ"):
+        // they pull THIS line back, the rest of the change applies after it.
+        var leadingDedents = 0
+        var rest = maskedTrimmed
+        while (true) {
+            val w = rules.dedentTriggers.firstOrNull { startsWithWord(rest, it) } ?: break
+            leadingDedents++
+            rest = rest.substring(w.length).trimStart()
         }
 
-        val indent = unit.repeat(currentDepth)
-        result.add(indent + trimmed)
+        val lineDepth = (depth - leadingDedents).coerceAtLeast(0)
+        // Continuation indent inside an unclosed ( or [ — unless the line
+        // itself starts by closing it.
+        val startsWithCloser = maskedTrimmed.firstOrNull() == ')' || maskedTrimmed.firstOrNull() == ']'
+        val effectiveBracket = if (startsWithCloser) bracketDepth - 1 else bracketDepth
+        val continuation = if (effectiveBracket > 0) 1 else 0
 
-        // Indent if the line ends with an indent trigger (and was not just a dedent line)
-        val isIndent = rules.indentTriggers.any { trimmed.endsWith(it) }
-        if (isIndent) {
-            currentDepth++
-        }
+        result.add(unit.repeat(lineDepth + continuation) + body)
+
+        depth = (depth + opens - closes).coerceAtLeast(0)
+        updateBracketDepth(masked.lines[i])
     }
 
     return result.joinToString("\n")

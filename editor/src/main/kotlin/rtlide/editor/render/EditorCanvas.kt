@@ -45,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.awtEventOrNull
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -68,6 +69,7 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
@@ -80,6 +82,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -130,6 +133,9 @@ fun EditorCanvas(
     val lineHeightPx = with(density) { lineHeight.toPx() }
     val gutterWidth = (fontSize * 4f).dp
     val gutterWidthPx = with(density) { gutterWidth.toPx() }
+    // Under the app-wide RTL layout the Row mirrors: the gutter sits on the right
+    // and the text canvas starts at x = 0. In LTR the canvas starts after the gutter.
+    val canvasLeftPx = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 0f else gutterWidthPx
 
     val baseStyle = remember(fontSize) {
         TextStyle(
@@ -161,18 +167,30 @@ fun EditorCanvas(
                 showTooltip = true
                 tab.instantTooltip = false
             } else if (!showTooltip) {
-                delay(400.milliseconds)
+                // IntelliJ editor tooltip delay (Editor > General: 500 ms)
+                delay(500.milliseconds)
                 showTooltip = true
             }
         } else if (isTooltipHovered) {
             showTooltip = true
         } else {
-            delay(500.milliseconds)
+            // Short grace period so the mouse can travel into the popup, as in IntelliJ
+            delay(300.milliseconds)
             if (tab.hoveredDiagnostics.isEmpty() && !isTooltipHovered) {
                 showTooltip = false
                 activeTooltipDiags = emptyList()
                 tab.instantTooltip = false
             }
+        }
+    }
+
+    // IntelliJ hides the inspection popup as soon as the editor scrolls or the
+    // document is re-analyzed (typing invalidates the hovered diagnostics).
+    LaunchedEffect(vscroll.value, diagnostics) {
+        if (showTooltip && !isTooltipHovered) {
+            showTooltip = false
+            activeTooltipDiags = emptyList()
+            tab.hoveredDiagnostics = emptyList()
         }
     }
 
@@ -233,6 +251,11 @@ fun EditorCanvas(
                 .onPreviewKeyEvent { event ->
                     if (tab.activePendingFix != null) return@onPreviewKeyEvent false
                     if (showTooltip && activeTooltipDiags.isNotEmpty()) {
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            showTooltip = false
+                            activeTooltipDiags = emptyList()
+                            return@onPreviewKeyEvent true
+                        }
                         val firstDiagWithFixes = activeTooltipDiags.find { it.fixes.isNotEmpty() }
                         if (firstDiagWithFixes != null) {
                             if (event.type == KeyEventType.KeyDown) {
@@ -250,10 +273,6 @@ fun EditorCanvas(
                                         showTooltip = false
                                         return@onPreviewKeyEvent true
                                     }
-                                    Key.Escape -> {
-                                        showTooltip = false
-                                        return@onPreviewKeyEvent true
-                                    }
                                 }
                             }
                         }
@@ -261,7 +280,10 @@ fun EditorCanvas(
                     handleKey(event, doc, completion, allSuggestions, indent, brackets, tab.lang.textDirection) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
-                .pointerInput(Unit) {
+                // Keyed on layouts/diagnostics: the handler must be restarted after
+                // analysis or re-layout, otherwise it hit-tests against stale data
+                // and hovering an unused symbol never finds its diagnostic.
+                .pointerInput(layouts, diagnostics, canvasLeftPx) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -274,14 +296,20 @@ fun EditorCanvas(
                             }
                             if (event.type == PointerEventType.Move) {
                                 val pos = event.changes.first().position
-                                // Adjust hit test by gutter width to correctly map mouse to text character
-                                val adjustedPos = Offset(pos.x - gutterWidthPx, pos.y)
-                                val caret = hitTest(adjustedPos) // This hitTest uses pos relative to Box
+                                // Adjust hit test by the canvas origin (gutter is on the
+                                // right in RTL) to correctly map mouse to text character.
+                                // This node sits inside verticalScroll, so the position
+                                // is already in content coordinates (scrolled = true).
+                                val adjustedPos = Offset(pos.x - canvasLeftPx, pos.y)
+                                val caret = hitTest(adjustedPos, scrolled = true)
+                                // Hover only reacts to highlighted problems (squiggles),
+                                // as in IntelliJ; Information/Hint stay on Alt+Enter.
                                 val diags = diagnostics.filter { d ->
+                                    (d.severity == Severity.Error || d.severity == Severity.Warning) &&
                                     d.location.line - 1 == caret.line &&
                                     caret.col in (d.location.column - 1)..<(d.location.column - 1 + d.length)
                                 }
-                                tab.hoveredDiagnostics = diags
+                                if (diags != tab.hoveredDiagnostics) tab.hoveredDiagnostics = diags
                             }
                             if (event.type == PointerEventType.Exit) {
                                 tab.hoveredDiagnostics = emptyList()
@@ -469,7 +497,7 @@ fun EditorCanvas(
             val cl = doc.caret.line.coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(cl)
             val col = doc.caret.col.coerceIn(0, doc.lineText(cl).length)
-            val caretX = if (layout != null) gutterWidthPx + originX(layout) + layout.getCursorRect(col).left else gutterWidthPx
+            val caretX = if (layout != null) canvasLeftPx + originX(layout) + layout.getCursorRect(col).left else canvasLeftPx
             val caretY = cl * lineHeightPx + lineHeightPx - vscroll.value
             Box(
                 Modifier
@@ -485,13 +513,27 @@ fun EditorCanvas(
             val lineIndex = (primaryDiag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(lineIndex)
             val col = (primaryDiag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
-            val x = if (layout != null) gutterWidthPx + originX(layout) + layout.getCursorRect(col).left else gutterWidthPx
-            val y = lineIndex * lineHeightPx + lineHeightPx - vscroll.value
+            val x = if (layout != null) canvasLeftPx + originX(layout) + layout.getCursorRect(col).left else canvasLeftPx
+            val lineTop = lineIndex * lineHeightPx - vscroll.value
+            val lineBottom = lineTop + lineHeightPx
+            val editorHeightPx = if (constraints.hasBoundedHeight) constraints.maxHeight.toFloat() else Float.MAX_VALUE
+            var tooltipSize by remember { mutableStateOf(IntSize.Zero) }
             
             Box(
                 Modifier
                     .align(AbsoluteAlignment.TopLeft)
-                    .absoluteOffset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                    .absoluteOffset {
+                        // Clamp inside the editor; flip above the line when the
+                        // popup would not fit below — same policy as IntelliJ.
+                        val tx = x.coerceIn(0f, (editorWidthPx - tooltipSize.width).coerceAtLeast(0f))
+                        val ty = if (lineBottom + tooltipSize.height > editorHeightPx && lineTop - tooltipSize.height >= 0f) {
+                            lineTop - tooltipSize.height
+                        } else {
+                            lineBottom
+                        }
+                        IntOffset(tx.roundToInt(), ty.roundToInt())
+                    }
+                    .onSizeChanged { tooltipSize = it }
                     .pointerInput(Unit) {
                         awaitPointerEventScope {
                             while (true) {
@@ -659,43 +701,84 @@ private fun IdeMenuItem(text: String, onClick: () -> Unit = {}) {
     )
 }
 
+/** IntelliJ (New UI, dark) inspection tooltip: severity icon + message,
+ *  a full-width separator, then quick fixes as links with the Alt+Enter hint. */
 @Composable
 fun ProblemTooltip(diags: List<Diagnostic>, selectedIndex: Int, onQuickFix: (rtlide.lang.analysis.QuickFix, Diagnostic) -> Unit) {
+    val background = Color(0xFF2B2D30)
+    val borderColor = Color(0xFF43454A)
+    val separator = Color(0xFF393B40)
+    val shape = RoundedCornerShape(8.dp)
     Column(
         Modifier
-            .background(IdeColors.TabInactiveBackground, RoundedCornerShape(4.dp))
-            .border(1.dp, IdeColors.BorderColor, RoundedCornerShape(4.dp))
-            .padding(12.dp)
-            .widthIn(max = 300.dp)
+            .shadow(8.dp, shape)
+            .clip(shape)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .widthIn(min = 200.dp, max = 500.dp)
     ) {
         diags.forEachIndexed { dIndex, diag ->
-            if (dIndex > 0) Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val color = when (diag.severity) {
-                    Severity.Error -> Color.Red
-                    Severity.Warning -> Color(0xFFEBCB8B)
-                    else -> Color.Gray
-                }
-                Box(Modifier.size(8.dp).background(color))
+            if (dIndex > 0) HorizontalDivider(color = separator)
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                SeverityIcon(diag.severity)
                 Spacer(Modifier.width(8.dp))
-                Text(diag.message, color = IdeColors.TextDefault, fontSize = 13.sp)
+                Text(diag.message, color = Color(0xFFDFE1E5), fontSize = 13.sp, lineHeight = 18.sp)
             }
             
             if (diag.fixes.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text("إصلاحات متوفرة:", color = IdeColors.TextMuted, fontSize = 11.sp)
-                diag.fixes.forEachIndexed { fIndex, fix ->
-                    val isSelected = dIndex == 0 && fIndex == selectedIndex
-                    Text(
-                        text = "• ${fix.label}",
-                        color = if (isSelected) Color(0xFF4EA9FF) else IdeColors.TextDefault,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent)
-                            .clickable { onQuickFix(fix, diag) }
-                            .padding(vertical = 4.dp, horizontal = 4.dp)
-                    )
+                HorizontalDivider(color = separator)
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    diag.fixes.forEachIndexed { fIndex, fix ->
+                        val isSelected = dIndex == 0 && fIndex == selectedIndex
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) Color(0xFF2E436E) else Color.Transparent)
+                                .clickable { onQuickFix(fix, diag) }
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(fix.label, color = Color(0xFF548AF7), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            if (fIndex == 0) {
+                                Spacer(Modifier.width(24.dp))
+                                Text("Alt+Enter", color = Color(0xFF6F737A), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** IntelliJ-style severity glyph: red circle for errors, yellow triangle for warnings. */
+@Composable
+private fun SeverityIcon(severity: Severity) {
+    Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+        when (severity) {
+            Severity.Warning -> {
+                Canvas(Modifier.fillMaxSize()) {
+                    val triangle = Path().apply {
+                        moveTo(size.width / 2f, 0f)
+                        lineTo(size.width, size.height)
+                        lineTo(0f, size.height)
+                        close()
+                    }
+                    drawPath(triangle, Color(0xFFF2C55C))
+                }
+                Text("!", color = Color(0xFF323232), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
+            }
+            else -> {
+                val bg = if (severity == Severity.Error) Color(0xFFDB5C5C) else Color(0xFF548AF7)
+                Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(percent = 50)).background(bg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("!", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
