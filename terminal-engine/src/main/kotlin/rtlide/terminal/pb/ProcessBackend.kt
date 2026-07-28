@@ -1,8 +1,5 @@
-package rtlide.terminal.pty
+package rtlide.terminal.pb
 
-import com.pty4j.PtyProcess
-import com.pty4j.PtyProcessBuilder
-import com.pty4j.WinSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,9 +13,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import rtlide.terminal.io.Utf8StreamDecoder
+import java.io.File
 import java.nio.charset.StandardCharsets
 
-class Pty4jBackend(
+/**
+ * A lightweight backend using java.lang.ProcessBuilder.
+ */
+class ProcessBackend(
     private val scope: CoroutineScope,
     private val workDir: String = System.getProperty("user.home")
 ) : TerminalBackend {
@@ -33,59 +34,49 @@ class Pty4jBackend(
     private val _isAlive = MutableStateFlow(false)
     override val isAlive: StateFlow<Boolean> = _isAlive.asStateFlow()
 
-    private var process: PtyProcess? = null
-    private var readerJob: Job? = null
+    private var process: Process? = null
+    private var jobs = mutableListOf<Job>()
 
     override fun start(command: Array<String>?) {
         close()
-
         val cmd = command ?: defaultShell()
-        val env = HashMap(System.getenv())
-        env["TERM"] = "xterm-256color"
-
+        
         try {
-            val builder = PtyProcessBuilder()
-                .setCommand(cmd)
-                .setEnvironment(env)
-                .setDirectory(workDir)
+            val builder = ProcessBuilder(*cmd)
+                .directory(File(workDir))
+                .redirectErrorStream(true) // Merge stdout and stderr
             
-            println("Starting PTY process: ${cmd.joinToString(" ")} in $workDir")
-            process = builder.start()
+            println("Starting Process: ${cmd.joinToString(" ")} in $workDir")
+            val proc = builder.start()
+            process = proc
             _isAlive.value = true
+
+            // Reader job
+            jobs.add(scope.launch(Dispatchers.IO) {
+                val decoder = Utf8StreamDecoder()
+                val buffer = ByteArray(8192)
+                val inputStream = proc.inputStream
+                try {
+                    while (isActive) {
+                        val n = inputStream.read(buffer)
+                        if (n < 0) break
+                        if (n > 0) {
+                            _output.emit(decoder.decode(buffer, n))
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Stream closed
+                } finally {
+                    _isAlive.value = false
+                    _output.emit("\n\u001B[33m[انتهت العملية]\u001B[0m\n")
+                }
+            })
+
         } catch (e: Exception) {
-            val msg = "خطأ في بدء العملية: ${e.message}"
-            System.err.println(msg)
-            e.printStackTrace()
+            val msg = "خطأ في تشغيل العملية: ${e.message}"
             _output.tryEmit("\u001B[31m$msg\u001B[0m\n")
             _isAlive.value = false
-            return
         }
-
-        val proc = process!!
-        val currentJob = scope.launch(Dispatchers.IO) {
-            val decoder = Utf8StreamDecoder()
-            val buffer = ByteArray(8192)
-            val inputStream = proc.inputStream
-            try {
-                while (isActive) {
-                    val n = inputStream.read(buffer)
-                    if (n < 0) {
-                        _output.emit("\n\u001B[33m[تم اكتمال العملية]\u001B[0m\n")
-                        break
-                    }
-                    if (n > 0) {
-                        _output.emit(decoder.decode(buffer, n))
-                    }
-                }
-            } catch (e: Exception) {
-                _output.emit("\n\u001B[31m[تم إغلاق التدفق: ${e.message}]\u001B[0m\n")
-            } finally {
-                if (readerJob == coroutineContext[Job]) {
-                    _isAlive.value = false
-                }
-            }
-        }
-        readerJob = currentJob
     }
 
     override fun write(input: String) {
@@ -99,11 +90,13 @@ class Pty4jBackend(
     }
 
     override fun resize(cols: Int, rows: Int) {
-        process?.winSize = WinSize(cols, rows)
+        // ProcessBuilder doesn't support terminal resizing as there is no PTY.
+        // We can ignore this or set an environment variable if needed.
     }
 
     override fun close() {
-        readerJob?.cancel()
+        jobs.forEach { it.cancel() }
+        jobs.clear()
         process?.destroy()
         process = null
         _isAlive.value = false
@@ -116,10 +109,9 @@ class Pty4jBackend(
     private fun defaultShell(): Array<String> {
         val os = System.getProperty("os.name").lowercase()
         return if (os.contains("win")) {
-            arrayOf("powershell.exe")
+            arrayOf("cmd.exe", "/c")
         } else {
-            val shell = System.getenv("SHELL") ?: "/bin/bash"
-            arrayOf(shell, "-i")
+            arrayOf("/bin/sh", "-c")
         }
     }
 }

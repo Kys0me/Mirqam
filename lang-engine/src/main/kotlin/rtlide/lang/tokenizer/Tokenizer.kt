@@ -69,7 +69,7 @@ class Tokenizer(private val g: Grammar) {
                 while (j < n && (line[j].isLetter() || line[j].isDigit() || line[j] == '_')) j++
                 var word = line.substring(i, j)
 
-                // Multi-word keyword support: check for "إن كان"
+                // Multi-word keyword support: check for "إن كان" or "ما دام"
                 if (word == "إن" && j < n && line[j] == ' ') {
                     val k = j + 1
                     if (line.substring(k).startsWith("كان")) {
@@ -77,6 +77,15 @@ class Tokenizer(private val g: Grammar) {
                         if (endOfKan == n || !(line[endOfKan].isLetter() || line[endOfKan].isDigit() || line[endOfKan] == '_')) {
                             word = "إن كان"
                             j = endOfKan
+                        }
+                    }
+                } else if (word == "ما" && j < n && line[j] == ' ') {
+                    val k = j + 1
+                    if (line.substring(k).startsWith("دام")) {
+                        val endOfDam = k + 3
+                        if (endOfDam == n || !(line[endOfDam].isLetter() || line[endOfDam].isDigit() || line[endOfDam] == '_')) {
+                            word = "ما دام"
+                            j = endOfDam
                         }
                     }
                 }

@@ -21,6 +21,17 @@ class SymbolExtractor {
                 extractFromStmt(stmt.thenBranch, symbols)
                 stmt.elseBranch?.let { extractFromStmt(it, symbols) }
             }
+            is Stmt.While -> {
+                extractFromExpr(stmt.condition, symbols)
+                extractFromStmt(stmt.body, symbols)
+            }
+            is Stmt.ForEach -> {
+                stmt.indexVar?.let { symbols.add(it.lexeme) }
+                symbols.add(stmt.elementVar.lexeme)
+                extractFromExpr(stmt.iterable, symbols)
+                extractFromStmt(stmt.body, symbols)
+            }
+            is Stmt.Break, is Stmt.Continue -> { /* no symbols */ }
             is Stmt.Let -> {
                 symbols.add(stmt.name.lexeme)
                 stmt.initializer?.let { extractFromExpr(it, symbols) }
@@ -39,8 +50,18 @@ class SymbolExtractor {
                 extractFromExpr(expr.left, symbols)
                 extractFromExpr(expr.right, symbols)
             }
+            is Expr.Logical -> {
+                extractFromExpr(expr.left, symbols)
+                extractFromExpr(expr.right, symbols)
+            }
+            is Expr.Unary -> {
+                extractFromExpr(expr.right, symbols)
+            }
             is Expr.Grouping -> extractFromExpr(expr.expression, symbols)
             is Expr.Literal -> { /* no symbols in literals */ }
+            is Expr.ListLiteral -> {
+                expr.elements.forEach { extractFromExpr(it, symbols) }
+            }
             is Expr.Variable -> symbols.add(expr.name.lexeme)
             is Expr.Call -> {
                 extractFromExpr(expr.callee, symbols)

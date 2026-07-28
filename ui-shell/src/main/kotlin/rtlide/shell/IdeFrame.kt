@@ -75,7 +75,7 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
 
     LaunchedEffect(keymap, layout, vm) {
         keymap.bind("ToggleProjectView") { layout.toggle(ToolWindowId.Project) }
-        keymap.bind("ToggleRun") { layout.toggle(ToolWindowId.Run) }
+        keymap.bind("ToggleTerminal") { layout.toggle(ToolWindowId.Run) }
         keymap.bind("HideAllWindows") { layout.hideAllToolWindows() }
         
         keymap.bind("Undo") { vm.editorState.activeTab?.document?.undo() }

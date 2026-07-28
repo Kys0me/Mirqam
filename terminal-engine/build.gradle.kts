@@ -14,7 +14,6 @@ dependencies {
     implementation(compose.material3)
     implementation(libs.kotlinx.coroutines.core)
 
-    // OPTIONAL — swap the ProcessBuilder backend for a real PTY (job control,
-    // isatty, window resize). Uncomment and implement Pty4jBackend : TerminalBackend.
-    implementation("org.jetbrains.pty4j:pty4j:0.13.4")
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
 }

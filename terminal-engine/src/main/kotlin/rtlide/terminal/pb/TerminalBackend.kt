@@ -1,4 +1,4 @@
-package rtlide.terminal.pty
+package rtlide.terminal.pb
 
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow

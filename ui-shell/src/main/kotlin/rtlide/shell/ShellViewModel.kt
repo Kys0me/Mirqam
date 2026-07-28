@@ -14,8 +14,8 @@ import rtlide.core.project.ProjectState
 import rtlide.core.project.ProjectStateStore
 import rtlide.editor.EditorState
 import rtlide.lang.analysis.SakhrAnalyzer
-import rtlide.terminal.pty.Pty4jBackend
-import rtlide.terminal.pty.TerminalBackend
+import rtlide.terminal.pb.ProcessBackend
+import rtlide.terminal.pb.TerminalBackend
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -75,7 +75,7 @@ class ShellViewModel(val scope: CoroutineScope) {
     }
 
     fun addRunTab(name: String = "تشغيل جديد"): RunTab {
-        val backend = Pty4jBackend(scope, currentProject?.path ?: System.getProperty("user.home"))
+        val backend = ProcessBackend(scope, currentProject?.path ?: System.getProperty("user.home"))
         val tab = RunTab(name, backend)
         runTabs.add(tab)
         activeRunTabIndex = runTabs.lastIndex
@@ -132,7 +132,7 @@ class ShellViewModel(val scope: CoroutineScope) {
         scope.launch {
             snapshotFlow { tab.document.text() }.collectLatest { content ->
                 // Run analysis if it's a Sakhr file
-                if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
+                if (file.extension.lowercase() == "صخر") {
                     val result = sakhrAnalyzer.analyze(content)
                     tab.diagnostics = result.diagnostics
                     tab.symbols = result.symbols

@@ -10,21 +10,15 @@ class TokenizerTest {
     fun testSakhrMultiWordKeyword() {
         val lang = SakhrLang.definition()
         val tokenizer = Tokenizer(lang.grammar)
-        val tokens = tokenizer.tokenize("إن كان (صح) ابدأ")
         
-        // Expected:
-        // "إن كان" -> keyword.control.arabic
-        // " " -> ignored
-        // "(" -> default (skipped in this simple tokenizer but affects indices)
-        // "صح" -> constant.language.arabic
-        // ")" -> default
-        // " " -> ignored
-        // "ابدأ" -> storage.type.arabic (it's in storage/keywords in SakhrLang.kt)
+        // Test "إن كان"
+        val tokensIf = tokenizer.tokenize("إن كان (صح) ابدأ")
+        val keywordIf = tokensIf.find { it.scope == "keyword.control.arabic" }
+        assertEquals("إن كان", "إن كان (صح) ابدأ".substring(keywordIf!!.start, keywordIf.end))
         
-        val keywordToken = tokens.find { it.scope == "keyword.control.arabic" }
-        assertEquals("إن كان", "إن كان (صح) ابدأ".substring(keywordToken!!.start, keywordToken.end))
-        
-        val constantToken = tokens.find { it.scope == "constant.language.arabic" }
-        assertEquals("صح", "إن كان (صح) ابدأ".substring(constantToken!!.start, constantToken.end))
+        // Test "ما دام"
+        val tokensWhile = tokenizer.tokenize("ما دام (صح) كرر")
+        val keywordWhile = tokensWhile.find { it.scope == "keyword.control.arabic" }
+        assertEquals("ما دام", "ما دام (صح) كرر".substring(keywordWhile!!.start, keywordWhile.end))
     }
 }

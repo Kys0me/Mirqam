@@ -27,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.MutableStateFlow
 import rtlide.core.theme.IdeColors
 import rtlide.shell.ShellViewModel
+import rtlide.terminal.ui.IntegratedTerminalView
 import rtlide.terminal.ui.TerminalTabItem
-import rtlide.terminal.ui.TerminalView
 
 @Composable
 fun RunPanel(vm: ShellViewModel, modifier: Modifier = Modifier) {
@@ -87,7 +87,7 @@ fun RunPanel(vm: ShellViewModel, modifier: Modifier = Modifier) {
 
             // Console View
             if (activeTab != null) {
-                TerminalView(activeTab.backend, Modifier.weight(1f))
+                IntegratedTerminalView(activeTab.backend, Modifier.weight(1f))
             } else {
                 Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("لا توجد عمليات تشغيل جارية", color = IdeColors.TextMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())

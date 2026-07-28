@@ -14,6 +14,16 @@ enum class TokenType {
     END,            // انتهى
     CONTEXT,        // السياق
     RETURN,         // رجع
+    WHILE,          // ما دام
+    REPEAT,         // كرر
+    FOR_EACH,       // لكل
+    IN,             // في
+    BREAK,          // اكسر
+    CONTINUE,       // واصل
+    AND,            // و
+    OR,             // أو
+    NOT,            // ليس
+    NULL,           // عدم
     
     // Literals
     IDENTIFIER,
@@ -29,14 +39,23 @@ enum class TokenType {
     EQUALS,         // =
     EQUALS_EQUALS,  // ==
     BANG_EQUALS,    // !=
+    PLUS_EQUALS,    // +=
+    MINUS_EQUALS,   // -=
+    STAR_EQUALS,    // *=
+    SLASH_EQUALS,   // /=
     LESS,           // <
     GREATER,        // >
+    LESS_EQUALS,    // <=
+    GREATER_EQUALS, // >=
     PLUS,           // +
     MINUS,          // -
     STAR,           // *
     SLASH,          // /
+    PERCENT,        // %
     LEFT_PAREN,     // (
     RIGHT_PAREN,    // )
+    LEFT_BRACKET,   // [
+    RIGHT_BRACKET,  // ]
     
     EOF
 }

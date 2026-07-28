@@ -32,10 +32,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         var receiverType: Token? = null
         var name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم لل$kind.")
         
-        if (name.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-             val subType = advance()
-             name = Token(name.type, name.lexeme + " " + subType.lexeme, name.literal, name.location)
-        }
+        name = mergeListSubtype(name)
 
         if (match(TokenType.DOUBLE_COLON)) {
             receiverType = name
@@ -49,13 +46,8 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
                 val paramName = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للوسيط.")
                 var paramType: Token? = null
                 if (match(TokenType.COLON)) {
-                    paramType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع للوسيط بعد ':'.")
-                    if (paramType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-                        val subType = advance()
-                        paramType = Token(paramType.type, paramType.lexeme + " " + subType.lexeme, paramType.literal, paramType.location)
-                    }
+                    paramType = mergeListSubtype(consumeType("يجب تحديد نوع للوسيط."))
                 }
-                
                 parameters.add(Param(paramName, paramType))
             } while (match(TokenType.COMMA))
         }
@@ -63,11 +55,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
         var returnType: Token? = null
         if (match(TokenType.COLON)) {
-            returnType = consume(TokenType.IDENTIFIER, "يجب تحديد نوع الراجع بعد ':'.")
-            if (returnType.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-                val subType = advance()
-                returnType = Token(returnType.type, returnType.lexeme + " " + subType.lexeme, returnType.literal, returnType.location)
-            }
+            returnType = mergeListSubtype(consumeType("يجب تحديد نوع الراجع."))
         }
 
         consume(TokenType.BEGIN, "يُتوقع وجود الكلمة المفتاحية 'ابدأ' لبدء متن ال$kind.")
@@ -75,22 +63,23 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         return Stmt.Function(name, receiverType, parameters, returnType, body)
     }
 
+    private fun mergeListSubtype(type: Token): Token {
+        if (type.lexeme == "قائمة" && (check(TokenType.IDENTIFIER) || check(TokenType.NULL))) {
+            val subType = advance()
+            return Token(type.type, "${type.lexeme} ${subType.lexeme}", type.literal, type.location)
+        }
+        return type
+    }
+
     private fun letDeclaration(): Stmt {
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للمتغير.")
         var type: Token? = null
         if (match(TokenType.COLON)) {
-            type = consume(TokenType.IDENTIFIER, "يجب تحديد النوع بعد ':'.")
-            if (type.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-                val subType = advance()
-                type = Token(type.type, type.lexeme + " " + subType.lexeme, type.literal, type.location)
-            }
+            type = mergeListSubtype(consumeType("يُتوقع وجود اسم النوع بعد ':'."))
         }
-        
         var initializer: Expr? = null
         if (match(TokenType.EQUALS)) {
             initializer = expression()
-        } else {
-            error(name, "يجب تعيين قيمة ابتدائية للمتغير '${name.lexeme}'. لا يُسمح بتعريف متغيرات بدون تهيئة.", listOf(QuickFix("إضافة قيمة ابتدائية", "ADD_INITIALIZER")))
         }
         return Stmt.Let(name, type, initializer)
     }
@@ -99,13 +88,8 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للثابت.")
         var type: Token? = null
         if (match(TokenType.COLON)) {
-            type = consume(TokenType.IDENTIFIER, "يجب تحديد النوع بعد ':'.")
-            if (type.lexeme == "قائمة" && check(TokenType.IDENTIFIER)) {
-                val subType = advance()
-                type = Token(type.type, type.lexeme + " " + subType.lexeme, type.literal, type.location)
-            }
+            type = mergeListSubtype(consumeType("يُتوقع وجود اسم النوع بعد ':'."))
         }
-        
         consume(TokenType.EQUALS, "يجب تعيين قيمة ابتدائية للثابت باستخدام '='.")
         val initializer = expression()
         return Stmt.Const(name, type, initializer)
@@ -122,8 +106,38 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun statement(): Stmt {
         if (match(TokenType.IF)) return ifStatement()
+        if (match(TokenType.WHILE)) return whileStatement()
+        if (match(TokenType.FOR_EACH)) return forEachStatement()
+        if (match(TokenType.BREAK)) return Stmt.Break(previous())
+        if (match(TokenType.CONTINUE)) return Stmt.Continue(previous())
         if (match(TokenType.BEGIN)) return Stmt.Block(block())
         return expressionStatement()
+    }
+
+    private fun whileStatement(): Stmt {
+        consume(TokenType.LEFT_PAREN, "يُتوقع وجود قوس '(' بعد 'ما دام'.")
+        val condition = expression()
+        consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس ')' بعد شرط 'ما دام'.")
+        consume(TokenType.REPEAT, "يُتوقع وجود الكلمة المفتاحية 'كرر' بعد شرط 'ما دام'.")
+        val body = Stmt.Block(block())
+        return Stmt.While(condition, body)
+    }
+
+    private fun forEachStatement(): Stmt {
+        consume(TokenType.LEFT_PAREN, "يُتوقع وجود قوس '(' بعد 'لكل'.")
+        val first = consume(TokenType.IDENTIFIER, "يجب تحديد اسم متغير الحلقة.")
+        var indexVar: Token? = null
+        var elementVar = first
+        if (match(TokenType.COMMA)) {
+            indexVar = first
+            elementVar = consume(TokenType.IDENTIFIER, "يجب تحديد اسم متغير العنصر بعد الفاصلة.")
+        }
+        consume(TokenType.IN, "يُتوقع وجود الكلمة المفتاحية 'في' بعد متغيرات الحلقة.")
+        val iterable = expression()
+        consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس ')' بعد تعبير المجموعة.")
+        consume(TokenType.BEGIN, "يُتوقع وجود الكلمة المفتاحية 'ابدأ' لبدء متن الحلقة.")
+        val body = Stmt.Block(block())
+        return Stmt.ForEach(indexVar, elementVar, iterable, body)
     }
 
     private fun ifStatement(): Stmt {
@@ -131,28 +145,41 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         val condition = expression()
         consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس ')' بعد شرط 'إن كان'.")
         consume(TokenType.THEN, "يُتوقع وجود الكلمة المفتاحية 'إذن' بعد الشرط.")
-        return parseComplexIf(condition)
-    }
-    
-    private fun parseComplexIf(condition: Expr): Stmt {
-        val thenStatements = mutableListOf<Stmt>()
-        while (!check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
-            val decl = declaration()
-            if (decl != null) thenStatements.add(decl)
+        
+        var thenBranchIsBlock = false
+        val thenBranch = if (match(TokenType.BEGIN)) {
+            thenBranchIsBlock = true
+            Stmt.Block(block())
+        } else {
+            val thenStatements = mutableListOf<Stmt>()
+            while (!check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
+                val decl = declaration()
+                if (decl != null) thenStatements.add(decl)
+            }
+            Stmt.Block(thenStatements)
         }
         
         var elseBranch: Stmt? = null
+        var elseBranchIsBlock = false
         if (match(TokenType.ELSE)) {
-            val elseStatements = mutableListOf<Stmt>()
-            while (!check(TokenType.END) && !isAtEnd()) {
-                val decl = declaration()
-                if (decl != null) elseStatements.add(decl)
+            if (match(TokenType.BEGIN)) {
+                elseBranchIsBlock = true
+                elseBranch = Stmt.Block(block())
+            } else {
+                val elseStatements = mutableListOf<Stmt>()
+                while (!check(TokenType.END) && !isAtEnd()) {
+                    val decl = declaration()
+                    if (decl != null) elseStatements.add(decl)
+                }
+                elseBranch = Stmt.Block(elseStatements)
             }
-            elseBranch = Stmt.Block(elseStatements)
         }
         
-        consume(TokenType.END, "يُتوقع وجود 'انتهى' في نهاية كتلة 'إن كان'.")
-        return Stmt.If(condition, Stmt.Block(thenStatements), elseBranch)
+        val needsEnd = if (elseBranch != null) !elseBranchIsBlock else !thenBranchIsBlock
+        if (needsEnd) {
+            consume(TokenType.END, "يُتوقع وجود 'انتهى' في نهاية كتلة 'إن كان'.")
+        }
+        return Stmt.If(condition, thenBranch, elseBranch)
     }
 
     private fun block(): List<Stmt> {
@@ -173,14 +200,54 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
     private fun expression(): Expr = assignment()
 
     private fun assignment(): Expr {
-        val expr = equality()
-        if (match(TokenType.EQUALS)) {
-            val equals = previous()
+        val expr = or()
+
+        if (match(TokenType.EQUALS, TokenType.PLUS_EQUALS, TokenType.MINUS_EQUALS, TokenType.STAR_EQUALS, TokenType.SLASH_EQUALS)) {
+            val operator = previous()
             val value = assignment()
+
             if (expr is Expr.Variable) {
-                return Expr.Assignment(expr.name, value)
+                val name = expr.name
+                
+                if (operator.type == TokenType.EQUALS) {
+                    return Expr.Assignment(name, value)
+                }
+
+                val binaryType = when (operator.type) {
+                    TokenType.PLUS_EQUALS -> TokenType.PLUS
+                    TokenType.MINUS_EQUALS -> TokenType.MINUS
+                    TokenType.STAR_EQUALS -> TokenType.STAR
+                    TokenType.SLASH_EQUALS -> TokenType.SLASH
+                    else -> throw error(operator, "عملية تعيين غير معروفة.")
+                }
+                
+                val binaryOp = Token(binaryType, operator.lexeme.substring(0, operator.lexeme.length - 1), null, operator.location)
+                val desugaredValue = Expr.Binary(expr, binaryOp, value)
+                return Expr.Assignment(name, desugaredValue)
             }
-            error(equals, "لا يمكن التعيين لهذه القيمة؛ هدف التعيين غير صالح.")
+
+            error(operator, "لا يمكن التعيين لهذه القيمة؛ هدف التعيين غير صالح.")
+        }
+
+        return expr
+    }
+
+    private fun or(): Expr {
+        var expr = and()
+        while (match(TokenType.OR)) {
+            val operator = previous()
+            val right = and()
+            expr = Expr.Logical(expr, operator, right)
+        }
+        return expr
+    }
+
+    private fun and(): Expr {
+        var expr = equality()
+        while (match(TokenType.AND)) {
+            val operator = previous()
+            val right = equality()
+            expr = Expr.Logical(expr, operator, right)
         }
         return expr
     }
@@ -197,7 +264,10 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun comparison(): Expr {
         var expr = term()
-        while (match(TokenType.GREATER, TokenType.LESS)) {
+        while (match(
+                TokenType.GREATER, TokenType.GREATER_EQUALS,
+                TokenType.LESS, TokenType.LESS_EQUALS
+        )) {
             val operator = previous()
             val right = term()
             expr = Expr.Binary(expr, operator, right)
@@ -217,7 +287,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun factor(): Expr {
         var expr = unary()
-        while (match(TokenType.STAR, TokenType.SLASH)) {
+        while (match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT)) {
             val operator = previous()
             val right = unary()
             expr = Expr.Binary(expr, operator, right)
@@ -225,7 +295,14 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         return expr
     }
 
-    private fun unary(): Expr = call()
+    private fun unary(): Expr {
+        if (match(TokenType.NOT, TokenType.MINUS)) {
+            val operator = previous()
+            val right = unary()
+            return Expr.Unary(operator, right)
+        }
+        return call()
+    }
 
     private fun call(): Expr {
         var expr = primary()
@@ -255,14 +332,28 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun primary(): Expr {
         if (match(TokenType.BOOLEAN, TokenType.NUMBER, TokenType.STRING)) return Expr.Literal(previous().literal)
+        if (match(TokenType.NULL)) return Expr.Literal(null)
         if (match(TokenType.CONTEXT)) return Expr.Context(previous())
         if (match(TokenType.IDENTIFIER)) return Expr.Variable(previous())
+        if (match(TokenType.LEFT_BRACKET)) return listLiteral()
         if (match(TokenType.LEFT_PAREN)) {
             val expr = expression()
             consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس إغلاق ')' بعد التعبير.")
             return Expr.Grouping(expr)
         }
         throw error(peek(), "يُتوقع وجود تعبير أولي أو قيمة.")
+    }
+
+    private fun listLiteral(): Expr {
+        val bracket = previous()
+        val elements = mutableListOf<Expr>()
+        if (!check(TokenType.RIGHT_BRACKET)) {
+            do {
+                elements.add(expression())
+            } while (match(TokenType.COMMA))
+        }
+        consume(TokenType.RIGHT_BRACKET, "يُتوقع وجود قوس إغلاق ']' بعد عناصر القائمة.")
+        return Expr.ListLiteral(bracket, elements)
     }
 
     private fun match(vararg types: TokenType): Boolean {
@@ -277,6 +368,11 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun consume(type: TokenType, message: String): Token {
         if (check(type)) return advance()
+        throw error(peek(), message)
+    }
+
+    private fun consumeType(message: String): Token {
+        if (check(TokenType.IDENTIFIER) || check(TokenType.NULL)) return advance()
         throw error(peek(), message)
     }
 
@@ -296,16 +392,14 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         return ParseError()
     }
 
-    private fun error(token: Token, message: String, suggestion: String): ParseError {
-        return error(token, message, listOf(QuickFix("استخدام $suggestion", suggestion)))
-    }
-
     private fun synchronize() {
         advance()
         while (!isAtEnd()) {
             if (previous().type == TokenType.END) return
             when (peek().type) {
-                TokenType.PROCEDURE, TokenType.LET, TokenType.CONST, TokenType.IF -> return
+                TokenType.PROCEDURE, TokenType.LET, TokenType.CONST, 
+                TokenType.IF, TokenType.WHILE, TokenType.FOR_EACH, 
+                TokenType.RETURN -> return
                 else -> advance()
             }
         }
