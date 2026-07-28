@@ -81,13 +81,43 @@ data class SmartEnterResult(
  * Combines indentation and auto-closing into a single atomic result to prevent
  * transient document states that could trigger false positive analysis errors.
  */
-fun calculateSmartEnter(currentLine: String, rules: IndentRules): SmartEnterResult {
+fun calculateSmartEnter(currentLine: String, rules: IndentRules, fullText: String = "", lineIndex: Int = -1): SmartEnterResult {
     val leading = currentLine.takeWhile { it == ' ' || it == '\t' }
     val trimmed = currentLine.trim()
     val unit = if (rules.useSpaces) " ".repeat(rules.indentSize) else "\t"
     
     val isTriggered = rules.indentTriggers.any { trimmed.endsWith(it) }
-    val autoClose = if (isTriggered) rules.dedentTriggers.firstOrNull() else null
+    
+    // Smart auto-close: check if we already have a matching closing tag for the current scope level
+    var autoClose: String? = null
+    if (isTriggered) {
+        val trigger = rules.indentTriggers.find { trimmed.endsWith(it) }
+        val closing = rules.dedentTriggers.firstOrNull() // Heuristic: first dedent trigger matches first indent trigger
+        
+        if (closing != null && fullText.isNotEmpty() && lineIndex != -1) {
+            val lines = fullText.split('\n')
+            var balance = 0
+            // Count balance starting from the line AFTER the current one
+            for (i in (lineIndex + 1) until lines.size) {
+                val l = lines[i].trim()
+                if (rules.indentTriggers.any { l.contains(it) }) balance++
+                if (rules.dedentTriggers.any { l.contains(it) }) balance--
+                
+                // If we found a matching closing tag that isn't already "claimed" by another opening tag
+                if (balance < 0) {
+                    // There is already a closing tag available for this block
+                    break
+                }
+            }
+            
+            if (balance >= 0) {
+                autoClose = closing
+            }
+        } else if (closing != null) {
+            // Fallback for simple cases
+            autoClose = closing
+        }
+    }
 
     return if (autoClose != null) {
         // Atomic block creation: indent + caret line + closing line

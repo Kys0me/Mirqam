@@ -23,13 +23,29 @@ class BracketMatcherTest {
     }
 
     @Test
-    fun testCalculateSmartEnter_WithTrigger() {
+    fun testCalculateSmartEnter_WithTrigger_NoAutoCloseNeeded() {
         val line = "إجراء ترحيب() ابدأ"
-        val result = calculateSmartEnter(line, rules)
-        // Should produce newline + indent + newline + dedent
-        assertEquals("\n    \nانتهى", result.text)
+        val fullText = """
+            إجراء ترحيب() ابدأ
+            
+            انتهى
+        """.trimIndent()
+        val result = calculateSmartEnter(line, rules, fullText, 0)
+        // Should only produce newline + indent, because 'انتهى' already exists
+        assertEquals("\n    ", result.text)
         assertEquals(1, result.caretLineOffset)
         assertEquals(4, result.caretColOffset)
+    }
+
+    @Test
+    fun testCalculateSmartEnter_WithTrigger_AutoCloseNeeded() {
+        val line = "إجراء ترحيب() ابدأ"
+        val fullText = """
+            إجراء ترحيب() ابدأ
+        """.trimIndent()
+        val result = calculateSmartEnter(line, rules, fullText, 0)
+        // Should produce auto-close block
+        assertEquals("\n    \nانتهى", result.text)
     }
 
     @Test

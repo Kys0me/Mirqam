@@ -25,7 +25,13 @@ object SakhrLang {
             strings = listOf(StringRule(begin = "\"", end = "\"", escape = "\\")),
         ),
         indent = IndentRules(indentTriggers = listOf("ابدأ"), dedentTriggers = listOf("انتهى"), indentSize = 4),
-        brackets = listOf(BracketPair("(", ")"), BracketPair("[", "]")),
+        brackets = listOf(
+            BracketPair("(", ")"),
+            BracketPair("[", "]"),
+            BracketPair("{", "}"),
+            BracketPair("\"", "\""),
+            BracketPair("'", "'")
+        ),
     )
 
     fun theme(): Theme = Theme(

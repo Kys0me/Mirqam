@@ -96,6 +96,7 @@ import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Severity
 import rtlide.lang.indent.Brackets
 import rtlide.lang.indent.calculateSmartEnter
+import rtlide.lang.schema.BracketPair
 import rtlide.lang.schema.IndentRules
 import rtlide.lang.schema.TextDir
 import java.awt.event.KeyEvent.CHAR_UNDEFINED
@@ -144,13 +145,16 @@ fun EditorCanvas(
     
     var showTooltip by remember { mutableStateOf(false) }
     var isTooltipHovered by remember { mutableStateOf(false) }
-    var activeTooltipDiag by remember { mutableStateOf<Diagnostic?>(null) }
+    var activeTooltipDiags by remember { mutableStateOf<List<Diagnostic>>(emptyList()) }
     var selectedFixIndex by remember { mutableStateOf(0) }
-    val hoveredDiag = tab.hoveredDiagnostic
+    val hoveredDiags = tab.hoveredDiagnostics
 
-    LaunchedEffect(hoveredDiag, isTooltipHovered, tab.instantTooltip) {
-        if (hoveredDiag != null) {
-            activeTooltipDiag = hoveredDiag
+    var lastClickTime by remember { mutableStateOf(0L) }
+    var clickCount by remember { mutableStateOf(0) }
+
+    LaunchedEffect(hoveredDiags, isTooltipHovered, tab.instantTooltip) {
+        if (hoveredDiags.isNotEmpty()) {
+            activeTooltipDiags = hoveredDiags
             selectedFixIndex = 0
             
             if (tab.instantTooltip) {
@@ -164,9 +168,9 @@ fun EditorCanvas(
             showTooltip = true
         } else {
             delay(500.milliseconds)
-            if (tab.hoveredDiagnostic == null && !isTooltipHovered) {
+            if (tab.hoveredDiagnostics.isEmpty() && !isTooltipHovered) {
                 showTooltip = false
-                activeTooltipDiag = null
+                activeTooltipDiags = emptyList()
                 tab.instantTooltip = false
             }
         }
@@ -228,30 +232,33 @@ fun EditorCanvas(
                 .focusable()
                 .onPreviewKeyEvent { event ->
                     if (tab.activePendingFix != null) return@onPreviewKeyEvent false
-                    if (showTooltip && hoveredDiag != null && hoveredDiag.fixes.isNotEmpty()) {
-                        if (event.type == KeyEventType.KeyDown) {
-                            when (event.key) {
-                                Key.DirectionDown -> {
-                                    selectedFixIndex = (selectedFixIndex + 1) % hoveredDiag.fixes.size
-                                    return@onPreviewKeyEvent true
-                                }
-                                Key.DirectionUp -> {
-                                    selectedFixIndex = (selectedFixIndex - 1 + hoveredDiag.fixes.size) % hoveredDiag.fixes.size
-                                    return@onPreviewKeyEvent true
-                                }
-                                Key.Enter -> {
-                                    tab.applyQuickFix(hoveredDiag.fixes[selectedFixIndex], hoveredDiag.location, hoveredDiag.length)
-                                    showTooltip = false
-                                    return@onPreviewKeyEvent true
-                                }
-                                Key.Escape -> {
-                                    showTooltip = false
-                                    return@onPreviewKeyEvent true
+                    if (showTooltip && activeTooltipDiags.isNotEmpty()) {
+                        val firstDiagWithFixes = activeTooltipDiags.find { it.fixes.isNotEmpty() }
+                        if (firstDiagWithFixes != null) {
+                            if (event.type == KeyEventType.KeyDown) {
+                                when (event.key) {
+                                    Key.DirectionDown -> {
+                                        selectedFixIndex = (selectedFixIndex + 1) % firstDiagWithFixes.fixes.size
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    Key.DirectionUp -> {
+                                        selectedFixIndex = (selectedFixIndex - 1 + firstDiagWithFixes.fixes.size) % firstDiagWithFixes.fixes.size
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    Key.Enter -> {
+                                        tab.applyQuickFix(firstDiagWithFixes.fixes[selectedFixIndex], firstDiagWithFixes.location, firstDiagWithFixes.length)
+                                        showTooltip = false
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    Key.Escape -> {
+                                        showTooltip = false
+                                        return@onPreviewKeyEvent true
+                                    }
                                 }
                             }
                         }
                     }
-                    handleKey(event, doc, completion, allSuggestions, indent, tab.lang.textDirection) { applyCompletion() }
+                    handleKey(event, doc, completion, allSuggestions, indent, brackets, tab.lang.textDirection) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
                 .pointerInput(Unit) {
@@ -267,15 +274,17 @@ fun EditorCanvas(
                             }
                             if (event.type == PointerEventType.Move) {
                                 val pos = event.changes.first().position
-                                val caret = hitTest(pos) // This hitTest uses pos relative to Box
-                                val diag = diagnostics.find { d ->
+                                // Adjust hit test by gutter width to correctly map mouse to text character
+                                val adjustedPos = Offset(pos.x - gutterWidthPx, pos.y)
+                                val caret = hitTest(adjustedPos) // This hitTest uses pos relative to Box
+                                val diags = diagnostics.filter { d ->
                                     d.location.line - 1 == caret.line &&
                                     caret.col in (d.location.column - 1)..<(d.location.column - 1 + d.length)
                                 }
-                                tab.hoveredDiagnostic = diag
+                                tab.hoveredDiagnostics = diags
                             }
                             if (event.type == PointerEventType.Exit) {
-                                tab.hoveredDiagnostic = null
+                                tab.hoveredDiagnostics = emptyList()
                             }
                         }
                     }
@@ -298,11 +307,32 @@ fun EditorCanvas(
                         .pointerInput(layouts, canvasWidthPx) {
                             detectTapGestures(
                                 onTap = { pos ->
-                                    doc.caret = hitTest(pos, scrolled = true)
-                                    doc.selectionAnchor = null
-                                    completion.hide()
-                                    showTooltip = false
-                                    focus.requestFocus()
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastClickTime < 300) {
+                                        clickCount++
+                                    } else {
+                                        clickCount = 1
+                                    }
+                                    lastClickTime = now
+
+                                    when (clickCount) {
+                                        2 -> {
+                                            val caret = hitTest(pos, scrolled = true)
+                                            doc.selectWordAt(caret)
+                                        }
+                                        3 -> {
+                                            val caret = hitTest(pos, scrolled = true)
+                                            doc.selectLineAt(caret.line)
+                                            clickCount = 0
+                                        }
+                                        else -> {
+                                            doc.caret = hitTest(pos, scrolled = true)
+                                            doc.selectionAnchor = null
+                                            completion.hide()
+                                            showTooltip = false
+                                            focus.requestFocus()
+                                        }
+                                    }
                                 }
                             )
                         }
@@ -450,11 +480,11 @@ fun EditorCanvas(
             }
         }
 
-        if (showTooltip && activeTooltipDiag != null) {
-            val diag = activeTooltipDiag!!
-            val lineIndex = (diag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
+        if (showTooltip && activeTooltipDiags.isNotEmpty()) {
+            val primaryDiag = activeTooltipDiags.first()
+            val lineIndex = (primaryDiag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(lineIndex)
-            val col = (diag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
+            val col = (primaryDiag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
             val x = if (layout != null) gutterWidthPx + originX(layout) + layout.getCursorRect(col).left else gutterWidthPx
             val y = lineIndex * lineHeightPx + lineHeightPx - vscroll.value
             
@@ -467,17 +497,17 @@ fun EditorCanvas(
                             while (true) {
                                 val event = awaitPointerEvent()
                                 when (event.type) {
-                                    PointerEventType.Enter -> isTooltipHovered = true
+                                    PointerEventType.Enter, PointerEventType.Move -> isTooltipHovered = true
                                     PointerEventType.Exit -> isTooltipHovered = false
                                 }
                             }
                         }
                     }
             ) {
-                ProblemTooltip(diag, selectedFixIndex) { fix -> 
+                ProblemTooltip(activeTooltipDiags, selectedFixIndex) { fix, diag -> 
                     tab.applyQuickFix(fix, diag.location, diag.length)
                     showTooltip = false 
-                    activeTooltipDiag = null
+                    activeTooltipDiags = emptyList()
                 }
             }
         }
@@ -630,7 +660,7 @@ private fun IdeMenuItem(text: String, onClick: () -> Unit = {}) {
 }
 
 @Composable
-fun ProblemTooltip(diag: Diagnostic, selectedIndex: Int, onQuickFix: (rtlide.lang.analysis.QuickFix) -> Unit) {
+fun ProblemTooltip(diags: List<Diagnostic>, selectedIndex: Int, onQuickFix: (rtlide.lang.analysis.QuickFix, Diagnostic) -> Unit) {
     Column(
         Modifier
             .background(IdeColors.TabInactiveBackground, RoundedCornerShape(4.dp))
@@ -638,32 +668,35 @@ fun ProblemTooltip(diag: Diagnostic, selectedIndex: Int, onQuickFix: (rtlide.lan
             .padding(12.dp)
             .widthIn(max = 300.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val color = when (diag.severity) {
-                Severity.Error -> Color.Red
-                Severity.Warning -> Color(0xFFEBCB8B)
-                else -> Color.Gray
+        diags.forEachIndexed { dIndex, diag ->
+            if (dIndex > 0) Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val color = when (diag.severity) {
+                    Severity.Error -> Color.Red
+                    Severity.Warning -> Color(0xFFEBCB8B)
+                    else -> Color.Gray
+                }
+                Box(Modifier.size(8.dp).background(color))
+                Spacer(Modifier.width(8.dp))
+                Text(diag.message, color = IdeColors.TextDefault, fontSize = 13.sp)
             }
-            Box(Modifier.size(8.dp).background(color))
-            Spacer(Modifier.width(8.dp))
-            Text(diag.message, color = IdeColors.TextDefault, fontSize = 13.sp)
-        }
-        
-        if (diag.fixes.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Text("إصلاحات متوفرة:", color = IdeColors.TextMuted, fontSize = 11.sp)
-            diag.fixes.forEachIndexed { index, fix ->
-                val isSelected = index == selectedIndex
-                Text(
-                    text = "• ${fix.label}",
-                    color = if (isSelected) Color(0xFF4EA9FF) else IdeColors.TextDefault,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent)
-                        .clickable { onQuickFix(fix) }
-                        .padding(vertical = 4.dp, horizontal = 4.dp)
-                )
+            
+            if (diag.fixes.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text("إصلاحات متوفرة:", color = IdeColors.TextMuted, fontSize = 11.sp)
+                diag.fixes.forEachIndexed { fIndex, fix ->
+                    val isSelected = dIndex == 0 && fIndex == selectedIndex
+                    Text(
+                        text = "• ${fix.label}",
+                        color = if (isSelected) Color(0xFF4EA9FF) else IdeColors.TextDefault,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+                            .clickable { onQuickFix(fix, diag) }
+                            .padding(vertical = 4.dp, horizontal = 4.dp)
+                    )
+                }
             }
         }
     }
@@ -688,6 +721,7 @@ private fun handleKey(
     completion: CompletionState,
     suggestions: List<String>,
     indent: IndentRules,
+    brackets: List<BracketPair>,
     textDirection: TextDir,
     applyCompletion: () -> Unit,
 ): Boolean {
@@ -739,8 +773,23 @@ private fun handleKey(
             return false
         }
         Key.Backspace -> {
+            if (!doc.hasSelection) {
+                val line = doc.lineText(doc.caret.line)
+                val c = doc.caret.col
+                if (c > 0 && c < line.length) {
+                    val b = line[c - 1]
+                    val a = line[c]
+                    val isPair = brackets.any { it.open == b.toString() && it.close == a.toString() } ||
+                        (b == '(' && a == ')') || (b == '[' && a == ']') || (b == '{' && a == '}') ||
+                        (b == '"' && a == '"') || (b == '\'' && a == '\'')
+                    if (isPair) {
+                        doc.deleteForward()
+                    }
+                }
+            }
+
             val line = doc.lineText(doc.caret.line)
-            val before = line.substring(0, doc.caret.col)
+            val before = line.substring(0, doc.caret.col.coerceAtMost(line.length))
             if (before.isNotEmpty() && before.all { it == ' ' || it == '\t' }) {
                 val toDelete = if (indent.useSpaces) indent.indentSize else 1
                 repeat(toDelete) { doc.backspace() }
@@ -762,7 +811,7 @@ private fun handleKey(
             if (completion.visible) { applyCompletion(); return true }
             val currentLine = doc.lineText(doc.caret.line)
             val startLine = doc.caret.line
-            val result = calculateSmartEnter(currentLine, indent)
+            val result = calculateSmartEnter(currentLine, indent, doc.text(), startLine)
             doc.insert(result.text)
             doc.caret = Caret(startLine + result.caretLineOffset, result.caretColOffset)
             completion.hide(); return true
@@ -792,6 +841,15 @@ private fun handleKey(
         else -> {
             val ch = e.awtEventOrNull?.keyChar
             if (ch != null && ch != CHAR_UNDEFINED && !ch.isISOControl()) {
+                val line = doc.lineText(doc.caret.line)
+                val c = doc.caret.col
+                
+                // Type-over: if typing the closing character that is already there, just move caret
+                if (c < line.length && line[c] == ch && ")]}\"'".contains(ch)) {
+                    doc.moveCaret(0, 1, false)
+                    return true
+                }
+
                 val autoClose = when (ch) {
                     '(' -> ")"
                     '[' -> "]"

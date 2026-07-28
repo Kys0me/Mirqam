@@ -18,11 +18,13 @@ sealed class Stmt {
     data class Block(val statements: List<Stmt>) : Stmt()
     data class Expression(val expression: Expr) : Stmt()
     data class Function(
+        val keyword: Token, // 'إجراء'
         val name: Token,
         val receiverType: Token?, // For extension methods
         val params: List<Param>,
         val returnType: Token?,
-        val body: List<Stmt>
+        val body: List<Stmt>,
+        val endToken: Token // 'انتهى'
     ) : Stmt()
     data class If(val condition: Expr, val thenBranch: Stmt, val elseBranch: Stmt?) : Stmt()
     data class While(val condition: Expr, val body: Stmt) : Stmt()
@@ -34,8 +36,8 @@ sealed class Stmt {
     ) : Stmt()
     data class Break(val keyword: Token) : Stmt()
     data class Continue(val keyword: Token) : Stmt()
-    data class Let(val name: Token, val type: Token?, val initializer: Expr?) : Stmt()
-    data class Const(val name: Token, val type: Token?, val initializer: Expr) : Stmt()
+    data class Let(val keyword: Token, val name: Token, val type: Token?, val initializer: Expr?, val endToken: Token) : Stmt()
+    data class Const(val keyword: Token, val name: Token, val type: Token?, val initializer: Expr, val endToken: Token) : Stmt()
     data class Return(val keyword: Token, val value: Expr?) : Stmt()
 }
 

@@ -66,11 +66,14 @@ class Document(initial: String = "") {
         }
     }
 
-    /** Insert [textToInsert] at the caret. Handles embedded newlines. */
+    /** Insert [textToInsert] at the caret. Handles embedded newlines. 
+     *  If there is a selection, it is replaced by [textToInsert]. */
     fun insert(textToInsert: String) {
-        if (textToInsert.isEmpty()) return
+        if (textToInsert.isEmpty() && !hasSelection) return
         pushUndo()
         if (hasSelection) deleteSelectionInternal()
+        if (textToInsert.isEmpty()) return
+
         val (l, c) = caret
         val current = lineText(l)
         val safeCol = c.coerceIn(0, current.length)
@@ -249,17 +252,27 @@ class Document(initial: String = "") {
     private fun deleteSelectionInternal() {
         val (start, end) = getSelectionRange() ?: return
         val next = lines.toMutableList()
-        val startLine = lineText(start.line)
-        val endLine = lineText(end.line)
         
-        val mergedLine = startLine.substring(0, start.col) + endLine.substring(end.col)
+        val startLineText = lineText(start.line)
+        val endLineText = lineText(end.line)
+        
+        val safeStartCol = start.col.coerceIn(0, startLineText.length)
+        val safeEndCol = end.col.coerceIn(0, endLineText.length)
+        
+        val mergedLine = startLineText.substring(0, safeStartCol) + endLineText.substring(safeEndCol)
         
         for (i in end.line downTo start.line + 1) {
-            next.removeAt(i)
+            if (i < next.size) {
+                next.removeAt(i)
+            }
         }
-        next[start.line] = mergedLine
+        
+        if (start.line < next.size) {
+            next[start.line] = mergedLine
+        }
+        
         lines = next
-        caret = start
+        caret = Caret(start.line, safeStartCol)
         selectionAnchor = null
     }
 
@@ -283,6 +296,29 @@ class Document(initial: String = "") {
     fun selectAll() {
         selectionAnchor = Caret(0, 0)
         caret = Caret((lines.size - 1).coerceAtLeast(0), lineText((lines.size - 1).coerceAtLeast(0)).length)
+    }
+
+    fun selectWordAt(c: Caret) {
+        val line = lineText(c.line)
+        if (line.isEmpty()) return
+        val col = c.col.coerceIn(0, line.length)
+        
+        var start = col
+        while (start > 0 && (line[start - 1].isLetterOrDigit() || line[start - 1] == '_')) start--
+        
+        var end = col
+        while (end < line.length && (line[end].isLetterOrDigit() || line[end] == '_')) end++
+        
+        if (start < end) {
+            selectionAnchor = Caret(c.line, start)
+            caret = Caret(c.line, end)
+        }
+    }
+
+    fun selectLineAt(lineIndex: Int) {
+        val line = lineText(lineIndex)
+        selectionAnchor = Caret(lineIndex, 0)
+        caret = Caret(lineIndex, line.length)
     }
 
     /** Replace the entire document content. */

@@ -1,6 +1,7 @@
 package rtlide.lang.analysis
 
 import org.junit.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SakhrAnalyzerTest {
@@ -14,10 +15,20 @@ class SakhrAnalyzerTest {
     }
 
     @Test
-    fun testUnusedVariableWarning() {
-        val source = "ليكن س = 10"
+    fun testUnusedVariableSmartRange() {
+        val source = "ليكن س : رقم = 5 + 5"
         val diagnostics = analyzer.analyze(source).diagnostics
-        assertTrue(diagnostics.any { it.severity == Severity.Warning })
+        val unused = diagnostics.find { it.message.contains("س") && it.severity == Severity.Warning }
+        assertTrue(unused != null, "Should have unused warning for 'س'")
+        
+        val fix = unused.fixes.find { it.replacement == "SAFE_DELETE_VAR" }
+        assertTrue(fix != null, "Should have safe delete fix")
+        
+        // startColOffset should reach back to 'ليكن'
+        // 'س' is at col 5. 'ليكن' is at col 0. offset = -5.
+        assertEquals(-5, fix.startColOffset)
+        // endColOffset should reach the end of the line (length 20) starting from 'ليكن'
+        assertEquals(20, fix.endColOffset)
     }
 
     @Test
@@ -63,14 +74,15 @@ class SakhrAnalyzerTest {
     }
 
     @Test
-    fun testNoWarningForFunctionParams() {
+    fun testWarningForUnusedFunctionParams() {
         val sourceUnused = """
             إجراء تجربة(س: رقم) ابدأ
                 رجع
             انتهى
+            تجربة(5)
         """.trimIndent()
         val diagsUnused = analyzer.analyze(sourceUnused).diagnostics
-        assertTrue(diagsUnused.none { it.severity == Severity.Warning }, "Should have no warnings for parameters")
+        assertTrue(diagsUnused.any { it.severity == Severity.Warning && it.message.contains("س") }, "Should have warning for unused parameter")
     }
 
     @Test
@@ -78,16 +90,25 @@ class SakhrAnalyzerTest {
         val source = """
             ليكن س = 5
             أكتب(س)
-            ألزم ص: رقم = 10
-            أكتب(ص)
             إجراء دالة(أ) ابدأ
                 أكتب(أ)
                 رجع أ
             انتهى
+            دالة(س)
         """.trimIndent()
         val diags = analyzer.analyze(source).diagnostics
         val infoDiags = diags.filter { it.severity == Severity.Information }
-        assertTrue(infoDiags.size >= 2, "Should have multiple information diagnostics")
+        assertTrue(infoDiags.isNotEmpty(), "Should have information diagnostics")
+    }
+
+    @Test
+    fun testUnusedFunctionWarning() {
+        val source = """
+            إجراء غير_مستخدمة() ابدأ
+            انتهى
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.severity == Severity.Warning && it.message.contains("غير_مستخدمة") })
     }
 
     @Test

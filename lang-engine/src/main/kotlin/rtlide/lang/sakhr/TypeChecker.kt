@@ -18,7 +18,9 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         val location: Location,
         var isUsed: Boolean = false,
         var isReassigned: Boolean = false,
-        val isParameter: Boolean = false
+        val isParameter: Boolean = false,
+        val fixOffset: Int = 0,
+        val fixLength: Int? = null
     )
     
     data class FunctionSignature(
@@ -26,7 +28,12 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         val params: MutableList<SakhrType>,
         val returnType: SakhrType,
         val kind: FunctionKind,
-        val receiverType: SakhrType? = null
+        val receiverType: SakhrType? = null,
+        val location: Location,
+        var isUsed: Boolean = false,
+        val isBuiltIn: Boolean = false,
+        val startLocation: Location? = null,
+        val endLocation: Location? = null
     )
 
     init {
@@ -59,7 +66,7 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
     }
 
     private fun registerBuiltIn(name: String, params: List<SakhrType>, returnType: SakhrType) {
-        val sig = FunctionSignature(name, params.toMutableList(), returnType, FunctionKind.FUNCTION)
+        val sig = FunctionSignature(name, params.toMutableList(), returnType, FunctionKind.FUNCTION, location = Location(0, 0), isBuiltIn = true, startLocation = Location(0, 0), endLocation = Location(0, 0))
         functions.getOrPut(name) { mutableListOf() }.add(sig)
     }
 
@@ -69,7 +76,7 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         params: List<SakhrType>,
         returnType: SakhrType
     ) {
-        val sig = FunctionSignature(name, params.toMutableList(), returnType, FunctionKind.EXTENSION, receiverType)
+        val sig = FunctionSignature(name, params.toMutableList(), returnType, FunctionKind.EXTENSION, receiverType, location = Location(0, 0), isBuiltIn = true, startLocation = Location(0, 0), endLocation = Location(0, 0))
         val key = "${receiverType.lexeme}::${name}"
         functions.getOrPut(key) { mutableListOf() }.add(sig)
     }
@@ -96,7 +103,10 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     params,
                     returnType,
                     kind,
-                    receiverType
+                    receiverType,
+                    location = stmt.name.location,
+                    startLocation = stmt.keyword.location,
+                    endLocation = stmt.endToken.location.let { Location(it.line, it.column + stmt.endToken.lexeme.length) }
                 )
                 val key = if (kind == FunctionKind.EXTENSION) "${receiverType?.lexeme}::${stmt.name.lexeme}" else stmt.name.lexeme
                 functions.getOrPut(key) { mutableListOf() }.add(sig)
@@ -108,6 +118,26 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         }
         
         endScope() // End global scope
+
+        // Report unused functions
+        for (sigs in functions.values) {
+            for (sig in sigs) {
+                if (!sig.isBuiltIn && !sig.isUsed && sig.name != "المطلع") {
+                    val startColOffset = if (sig.startLocation != null) sig.startLocation.column - sig.location.column else 0
+                    val endLineOffset = if (sig.startLocation != null && sig.endLocation != null) sig.endLocation.line - sig.startLocation.line else 0
+                    val endColOffset = if (sig.endLocation != null && sig.startLocation != null) {
+                        if (endLineOffset == 0) sig.endLocation.column - sig.startLocation.column else sig.endLocation.column
+                    } else null
+
+                    diagnostics.reportWarning(
+                        "الدالة '${sig.name}' غير مستخدمة.",
+                        sig.location,
+                        sig.name.length,
+                        listOf(QuickFix("حذف آمن للدالة", "SAFE_DELETE_FUNCTION", startColOffset, endLineOffset, endColOffset))
+                    )
+                }
+            }
+        }
     }
 
     private fun checkStmt(stmt: Stmt) {
@@ -152,7 +182,12 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                 for (i in stmt.params.indices) {
                     val param = stmt.params[i]
                     val paramType = sig.params[i]
-                    declare(param.name, paramType, isConstant = true, isParameter = true)
+                    
+                    val pStart = param.name.location.column
+                    val pEnd = param.type?.let { it.location.column + it.lexeme.length } ?: (param.name.location.column + param.name.lexeme.length)
+                    val fixLength = pEnd - pStart
+
+                    declare(param.name, paramType, isConstant = true, isParameter = true, fixOffset = 0, fixLength = fixLength)
                     define(param.name)
                     
                     if (param.type == null && paramType != SakhrType.UNKNOWN) {
@@ -255,7 +290,10 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     initType
                 }
                 
-                declare(stmt.name, finalType, isConstant = false)
+                val fixOffset = stmt.keyword.location.column - stmt.name.location.column
+                val fixLength = (stmt.endToken.location.column + stmt.endToken.lexeme.length) - stmt.keyword.location.column
+                
+                declare(stmt.name, finalType, isConstant = false, fixOffset = fixOffset, fixLength = fixLength)
                 if (stmt.initializer != null) define(stmt.name)
                 
                 if (stmt.type == null && finalType != SakhrType.UNKNOWN && finalType != SakhrType.VOID) {
@@ -281,7 +319,10 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     initType
                 }
                 
-                declare(stmt.name, finalType, isConstant = true)
+                val fixOffset = stmt.keyword.location.column - stmt.name.location.column
+                val fixLength = (stmt.endToken.location.column + stmt.endToken.lexeme.length) - stmt.keyword.location.column
+
+                declare(stmt.name, finalType, isConstant = true, fixOffset = fixOffset, fixLength = fixLength)
                 define(stmt.name)
                 
                 if (stmt.type == null && finalType != SakhrType.UNKNOWN) {
@@ -492,6 +533,7 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         }
         
         if (sig != null) {
+            sig.isUsed = true
             var modified = false
             val newParams = sig.params.toMutableList()
             for (i in sig.params.indices) {
@@ -534,13 +576,13 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         return null
     }
 
-    private fun declare(name: Token, type: SakhrType, isConstant: Boolean, isParameter: Boolean = false) {
+    private fun declare(name: Token, type: SakhrType, isConstant: Boolean, isParameter: Boolean = false, fixOffset: Int = 0, fixLength: Int? = null) {
         if (scopes.isEmpty()) return
         val scope = scopes.last()
         if (scope.containsKey(name.lexeme)) {
             diagnostics.reportError("تم تعريف الاسم '${name.lexeme}' مسبقاً في هذا النطاق.", name.location)
         }
-        scope[name.lexeme] = VariableInfo(type, isConstant, false, name.location, isParameter = isParameter)
+        scope[name.lexeme] = VariableInfo(type, isConstant, false, name.location, isParameter = isParameter, fixOffset = fixOffset, fixLength = fixLength)
     }
 
     private fun define(name: Token) {
@@ -564,10 +606,14 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
     private fun endScope() {
         val lastScope = scopes.removeAt(scopes.size - 1)
         for ((name, info) in lastScope) {
-            if (info.isParameter) continue
             if (!info.isUsed && name != "السياق") {
-                diagnostics.reportWarning("المتغير '$name' غير مستخدم.", info.location, name.length)
-            } else if (!info.isConstant && !info.isReassigned && name != "السياق") {
+                val fixes = if (info.isParameter) {
+                    listOf(QuickFix("حذف آمن للوسيط", "SAFE_DELETE_PARAM", startColOffset = info.fixOffset, endColOffset = info.fixLength))
+                } else {
+                    listOf(QuickFix("حذف آمن للمتغير", "SAFE_DELETE_VAR", startColOffset = info.fixOffset, endColOffset = info.fixLength))
+                }
+                diagnostics.reportWarning("المتغير '$name' غير مستخدم.", info.location, name.length, fixes)
+            } else if (!info.isConstant && !info.isReassigned && name != "السياق" && !info.isParameter) {
                  diagnostics.reportWarning("المتغير '$name' لا يتم تعديله؛ يفضل تعريفه باستخدام 'ألزم'.", info.location, name.length, listOf(QuickFix("استخدام 'ألزم'", "ألزم")))
             }
         }

@@ -28,7 +28,7 @@ class EditorTab(
 ) {
     var diagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
     var symbols by mutableStateOf<List<String>>(emptyList())
-    var hoveredDiagnostic by mutableStateOf<Diagnostic?>(null)
+    var hoveredDiagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
     var instantTooltip by mutableStateOf(false)
     
     var quickFixInput by mutableStateOf<String?>(null)
@@ -39,11 +39,23 @@ class EditorTab(
         val replacement = fix.replacement
         val lineIndex = location.line - 1
         val colIndex = location.column - 1
-        val line = document.lineText(lineIndex)
         
+        val startCaret = rtlide.core.document.Caret(lineIndex, (colIndex + fix.startColOffset).coerceAtLeast(0))
+        val endLine = (lineIndex + fix.endLineOffset).coerceIn(0, document.lines.size - 1)
+        val endCol = if (fix.endColOffset != null) {
+            val offset: Int = fix.endColOffset!!
+            // If it's the same line, it's relative to start. If multi-line, it's absolute (1-based from analyzer).
+            val baseEndCol = if (fix.endLineOffset == 0) startCaret.col + offset else (offset - 1)
+            baseEndCol.coerceIn(0, document.lineText(endLine).length)
+        } else {
+            (colIndex + length).coerceIn(0, document.lineText(endLine).length)
+        }
+        val endCaret = rtlide.core.document.Caret(endLine, endCol)
+
         when {
             replacement == "CHANGE_TO_VAR" -> {
                 // Find 'ألزم' before the variable
+                val line = document.lineText(lineIndex)
                 val startOfLine = line.substring(0, colIndex)
                 val constIndex = startOfLine.lastIndexOf("ألزم")
                 if (constIndex != -1) {
@@ -67,6 +79,7 @@ class EditorTab(
             }
             replacement == "ألزم" -> {
                 // Find 'ليكن' before the variable
+                val line = document.lineText(lineIndex)
                 val startOfLine = line.substring(0, colIndex)
                 val letIndex = startOfLine.lastIndexOf("ليكن")
                 if (letIndex != -1) {
@@ -81,24 +94,23 @@ class EditorTab(
                 document.insert(": $typeName")
             }
             replacement == "REMOVE_TYPE" -> {
-                // Find ': Type' after the identifier
+                val line = document.lineText(lineIndex)
                 val afterId = line.substring(colIndex + length)
                 val colonIndex = afterId.indexOf(':')
                 if (colonIndex != -1) {
-                    val remaining = afterId.substring(colonIndex + 1).trimStart()
-                    // Find the end of the type name (letters and spaces for 'قائمة رقم')
-                    var typeEnd = 0
-                    while (typeEnd < remaining.length && (remaining[typeEnd].isLetter() || remaining[typeEnd].isWhitespace())) {
+                    val fromColon = afterId.substring(colonIndex)
+                    var typeEnd = 1 // Skip colon
+                    while (typeEnd < fromColon.length && (fromColon[typeEnd].isLetter() || fromColon[typeEnd].isWhitespace())) {
                         typeEnd++
                     }
-                    val totalToRemove = (afterId.length - (afterId.substring(colonIndex + 1 + typeEnd).length))
                     
-                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length + totalToRemove)
+                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length + colonIndex + typeEnd)
                     document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + length)
                     document.insert("")
                 }
             }
             replacement.startsWith("ADD_RETURN_TYPE:") -> {
+                val line = document.lineText(lineIndex)
                 val typeName = replacement.removePrefix("ADD_RETURN_TYPE:")
                 // Find ')' after the function name
                 val afterFn = line.substring(colIndex)
@@ -109,6 +121,7 @@ class EditorTab(
                 }
             }
             replacement == "REMOVE_RETURN_TYPE" -> {
+                val line = document.lineText(lineIndex)
                 // Find ': Type' after ')'
                 val afterFn = line.substring(colIndex)
                 val closingParen = afterFn.indexOf(')')
@@ -116,13 +129,12 @@ class EditorTab(
                     val afterParen = afterFn.substring(closingParen + 1)
                     val colonIndex = afterParen.indexOf(':')
                     if (colonIndex != -1) {
-                         val remaining = afterParen.substring(colonIndex + 1).trimStart()
-                         var typeEnd = 0
-                         while (typeEnd < remaining.length && (remaining[typeEnd].isLetter() || remaining[typeEnd].isWhitespace())) {
+                         val fromColon = afterParen.substring(colonIndex)
+                         var typeEnd = 1
+                         while (typeEnd < fromColon.length && (fromColon[typeEnd].isLetter() || fromColon[typeEnd].isWhitespace())) {
                              typeEnd++
                          }
-                         val totalToRemove = (afterParen.length - (afterParen.substring(colonIndex + 1 + typeEnd).length))
-                         document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1 + totalToRemove)
+                         document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1 + colonIndex + typeEnd)
                          document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1)
                          document.insert("")
                     }
@@ -148,6 +160,64 @@ class EditorTab(
                 document.caret = newCaret
                 document.insert("${indent}ليكن $varName\n")
             }
+            replacement == "SAFE_DELETE_VAR" || replacement == "SAFE_DELETE_FUNCTION" -> {
+                // Perform smart deletion using the provided range
+                document.caret = endCaret
+                document.selectionAnchor = startCaret
+                
+                // If we are deleting a full line (or multiple lines), try to clean up the trailing newline
+                if (startCaret.col == 0 && endCaret.line < document.lines.size - 1) {
+                    val lastLineText = document.lineText(endCaret.line)
+                    val trailingPart = if (endCaret.col < lastLineText.length) lastLineText.substring(endCaret.col) else ""
+                    if (trailingPart.isBlank()) {
+                        document.caret = rtlide.core.document.Caret(endCaret.line + 1, 0)
+                    }
+                }
+                
+                document.insert("")
+            }
+            replacement == "SAFE_DELETE_PARAM" -> {
+                val line = document.lineText(lineIndex)
+                val startParen = line.lastIndexOf('(', colIndex)
+                val endParen = line.indexOf(')', colIndex)
+                if (startParen != -1 && endParen != -1 && endParen > startParen) {
+                    // Start unit exactly at start offset provided or colIndex
+                    val unitStart = colIndex + fix.startColOffset
+                    // End unit exactly at end offset provided (relative to unitStart if endLineOffset is 0) or colIndex + length
+                    val unitEnd = if (fix.endColOffset != null) {
+                        if (fix.endLineOffset == 0) unitStart + fix.endColOffset!! else fix.endColOffset!!
+                    } else {
+                        // Fallback: name + possible type
+                        var e = colIndex + length
+                        val afterId = line.substring(e)
+                        val match = Regex("^\\s*:\\s*[\\w\\s]+").find(afterId)
+                        if (match != null) e += match.value.length
+                        e
+                    }
+                    
+                    var deleteStart = unitStart
+                    var deleteEnd = unitEnd
+                    
+                    val beforeUnit = line.substring(startParen + 1, unitStart)
+                    val afterUnit = line.substring(unitEnd, endParen)
+                    
+                    if (afterUnit.contains('،')) {
+                        val commaPos = afterUnit.indexOf('،')
+                        deleteEnd = unitEnd + commaPos + 1
+                        while (deleteEnd < endParen && line[deleteEnd].isWhitespace()) deleteEnd++
+                    } else if (beforeUnit.contains('،')) {
+                        val commaPos = beforeUnit.lastIndexOf('،')
+                        deleteStart = startParen + 1 + commaPos
+                    } else {
+                        deleteStart = (startParen + 1 + beforeUnit.takeWhile { it.isWhitespace() }.length).coerceAtMost(unitStart)
+                        deleteEnd = (unitEnd + afterUnit.takeLastWhile { it.isWhitespace() }.length).coerceAtLeast(unitEnd)
+                    }
+                    
+                    document.caret = rtlide.core.document.Caret(lineIndex, deleteEnd)
+                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, deleteStart)
+                    document.insert("")
+                }
+            }
             else -> {
                 // Suggestion replacement
                 document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
@@ -159,12 +229,12 @@ class EditorTab(
 
     fun showIntentionActions() {
         val currentCaret = document.caret
-        val diag = diagnostics.find { d ->
+        val diags = diagnostics.filter { d ->
             d.location.line - 1 == currentCaret.line &&
             currentCaret.col in (d.location.column - 1)..(d.location.column - 1 + d.length)
         }
-        if (diag != null) {
-            hoveredDiagnostic = diag
+        if (diags.isNotEmpty()) {
+            hoveredDiagnostics = diags
             instantTooltip = true
         }
     }

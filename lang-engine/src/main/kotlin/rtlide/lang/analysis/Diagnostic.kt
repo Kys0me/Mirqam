@@ -9,7 +9,13 @@ enum class Severity {
     Hint
 }
 
-data class QuickFix(val label: String, val replacement: String)
+data class QuickFix(
+    val label: String, 
+    val replacement: String,
+    val startColOffset: Int = 0, 
+    val endLineOffset: Int = 0,
+    val endColOffset: Int? = null 
+)
 
 data class Diagnostic(
     val message: String,

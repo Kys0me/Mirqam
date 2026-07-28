@@ -29,6 +29,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
     }
 
     private fun function(kind: String): Stmt {
+        val keyword = previous()
         var receiverType: Token? = null
         var name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم لل$kind.")
         
@@ -59,8 +60,13 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         }
 
         consume(TokenType.BEGIN, "يُتوقع وجود الكلمة المفتاحية 'ابدأ' لبدء متن ال$kind.")
-        val body = block()
-        return Stmt.Function(name, receiverType, parameters, returnType, body)
+        val body = mutableListOf<Stmt>()
+        while (!check(TokenType.END) && !isAtEnd()) {
+            val decl = declaration()
+            if (decl != null) body.add(decl)
+        }
+        val endToken = consume(TokenType.END, "يُتوقع وجود 'انتهى' لإنهاء الكتلة البرمجية.")
+        return Stmt.Function(keyword, name, receiverType, parameters, returnType, body, endToken)
     }
 
     private fun mergeListSubtype(type: Token): Token {
@@ -72,6 +78,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
     }
 
     private fun letDeclaration(): Stmt {
+        val keyword = previous()
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للمتغير.")
         var type: Token? = null
         if (match(TokenType.COLON)) {
@@ -81,10 +88,12 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         if (match(TokenType.EQUALS)) {
             initializer = expression()
         }
-        return Stmt.Let(name, type, initializer)
+        val endToken = previous()
+        return Stmt.Let(keyword, name, type, initializer, endToken)
     }
 
     private fun constDeclaration(): Stmt {
+        val keyword = previous()
         val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للثابت.")
         var type: Token? = null
         if (match(TokenType.COLON)) {
@@ -92,7 +101,8 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         }
         consume(TokenType.EQUALS, "يجب تعيين قيمة ابتدائية للثابت باستخدام '='.")
         val initializer = expression()
-        return Stmt.Const(name, type, initializer)
+        val endToken = previous()
+        return Stmt.Const(keyword, name, type, initializer, endToken)
     }
 
     private fun returnStatement(): Stmt {
