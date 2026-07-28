@@ -103,7 +103,9 @@ class ProcessBackend(
     }
 
     override fun clear() {
-        _output.tryEmit("\u000C")
+        scope.launch {
+            _output.emit("\u000C")
+        }
     }
 
     private fun defaultShell(): Array<String> {

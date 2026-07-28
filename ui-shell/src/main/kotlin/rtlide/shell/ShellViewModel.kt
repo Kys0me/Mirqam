@@ -84,10 +84,13 @@ class ShellViewModel(val scope: CoroutineScope) {
 
     fun closeRunTab(index: Int) {
         if (index in runTabs.indices) {
-            runTabs[index].backend.close()
+            val tab = runTabs[index]
+            tab.backend.close()
             runTabs.removeAt(index)
-            if (activeRunTabIndex >= runTabs.size) {
-                activeRunTabIndex = (runTabs.size - 1).coerceAtLeast(0)
+            
+            // Adjust active index
+            if (activeRunTabIndex >= index) {
+                activeRunTabIndex = (activeRunTabIndex - 1).coerceAtLeast(0)
             }
         }
     }
@@ -101,7 +104,7 @@ class ShellViewModel(val scope: CoroutineScope) {
                 activeRunTabIndex = runTabs.indexOf(tab)
             }
             
-            // Clear the console before running
+            tab.backend.close()
             tab.backend.clear()
             
             tab.lastCommand = cmd
