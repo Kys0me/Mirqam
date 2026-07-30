@@ -1,8 +1,5 @@
 package rtlide.lang.highlight
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -17,31 +14,93 @@ import rtlide.lang.tokenizer.Tokenizer
  * The editor measures this AnnotatedString directly, so highlighting and Bidi
  * shaping compose naturally.
  */
+class VisualLine(
+    val annotatedString: AnnotatedString,
+    val numberRanges: List<IntRange> = emptyList(),
+    val isRtl: Boolean = false
+) {
+    fun docToLayout(docOffset: Int): Int {
+        if (!isRtl) return docOffset
+        var shift = 0
+        for (range in numberRanges) {
+            if (range.first <= docOffset) shift++
+            if (range.last <= docOffset) shift++
+        }
+        return docOffset + shift
+    }
+
+    fun layoutToDoc(layoutOffset: Int): Int {
+        if (!isRtl) return layoutOffset
+        var shift = 0
+        for (range in numberRanges) {
+            val rloPos = range.first + shift
+            if (layoutOffset > rloPos) shift++
+            val pdfPos = range.last + shift
+            if (layoutOffset > pdfPos) shift++
+        }
+        return (layoutOffset - shift).coerceAtLeast(0)
+    }
+}
+
 class Highlighter(
     private val tokenizer: Tokenizer,
     private val theme: Theme,
 ) {
-    /** Bump to invalidate the editor's cached line layouts (e.g. theme change). */
-    var version by mutableStateOf(0)
-        private set
+    fun highlight(line: String, isRtl: Boolean = false): VisualLine {
+        val tokens = tokenizer.tokenize(line)
+        val numberRanges = if (isRtl) {
+            tokens.filter { it.scope == "constant.numeric" }.map { it.start..it.end }
+        } else emptyList()
 
-    fun highlight(line: String): AnnotatedString = buildAnnotatedString {
-        append(line)
-        for (t in tokenizer.tokenize(line)) {
-            val style = theme.tokenColors[t.scope] ?: continue
-            addStyle(
-                SpanStyle(
-                    color = hexToColor(style.color),
-                    fontWeight = if (style.bold) FontWeight.Bold else null,
-                    fontStyle = if (style.italic) FontStyle.Italic else null,
-                ),
-                t.start.coerceIn(0, line.length),
-                t.end.coerceIn(0, line.length),
-            )
+        val annotatedString = buildAnnotatedString {
+            if (!isRtl || numberRanges.isEmpty()) {
+                append(line)
+            } else {
+                var last = 0
+                for (range in numberRanges) {
+                    append(line.substring(last, range.first))
+                    append("\u202E") // RLO: Right-to-Left Override
+                    append(line.substring(range.first, range.last))
+                    append("\u202C") // PDF: Pop Directional Format
+                    last = range.last
+                }
+                append(line.substring(last))
+            }
+
+            for (t in tokens) {
+                val style = theme.tokenColors[t.scope] ?: continue
+
+                val start = if (isRtl) {
+                    var shift = 0
+                    for (r in numberRanges) {
+                        if (r.first <= t.start) shift++
+                        if (r.last <= t.start) shift++
+                    }
+                    t.start + shift
+                } else t.start
+
+                val end = if (isRtl) {
+                    var shift = 0
+                    for (r in numberRanges) {
+                        if (r.first <= t.end) shift++
+                        if (r.last <= t.end) shift++
+                    }
+                    t.end + shift
+                } else t.end
+
+                addStyle(
+                    SpanStyle(
+                        color = hexToColor(style.color),
+                        fontWeight = if (style.bold) FontWeight.Bold else null,
+                        fontStyle = if (style.italic) FontStyle.Italic else null,
+                    ),
+                    start.coerceIn(0, length),
+                    end.coerceIn(0, length),
+                )
+            }
         }
+        return VisualLine(annotatedString, numberRanges, isRtl)
     }
-
-    fun invalidate() { version++ }
 }
 
 /** Parse "#RRGGBB" or "#AARRGGBB" into a Compose Color. */

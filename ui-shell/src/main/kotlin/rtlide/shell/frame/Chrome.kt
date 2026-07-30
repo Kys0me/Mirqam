@@ -14,6 +14,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
@@ -107,26 +114,49 @@ fun MainToolbar(
 fun IdeMenuBar(onOpenFile: () -> Unit, onOpenProject: () -> Unit) {
     Row {
         IdeMenuCategory("ملف") {
-            IdeMenuItem("فتح ملف...", onClick = onOpenFile)
-            IdeMenuItem("فتح مشروع...", onClick = onOpenProject)
+            IdeMenuItem(
+                "فتح ملف...",
+                icon = { Icon(Icons.Default.FileOpen, null, Modifier.size(16.dp)) },
+                onClick = onOpenFile
+            )
+            IdeMenuItem(
+                "فتح مشروع...",
+                icon = { Icon(Icons.Default.CreateNewFolder, null, Modifier.size(16.dp)) },
+                onClick = onOpenProject
+            )
             HorizontalDivider(
                 color = IdeColors.BorderColor,
                 modifier = Modifier.padding(vertical = 4.dp)
             )
             IdeMenuItem(
                 "خروج",
-                onClick = { /* exitApplication handles this in Main, we might need to pass a callback */ })
+                onClick = { /* exitApplication handles this in Main */ })
         }
         IdeMenuCategory("تحرير") {
-            IdeMenuItem("تراجع")
-            IdeMenuItem("إعادة")
+            IdeMenuItem(
+                "تراجع",
+                icon = { Icon(Icons.AutoMirrored.Filled.Undo, null, Modifier.size(16.dp)) }
+            )
+            IdeMenuItem(
+                "إعادة",
+                icon = { Icon(Icons.AutoMirrored.Filled.Redo, null, Modifier.size(16.dp)) }
+            )
             HorizontalDivider(
                 color = IdeColors.BorderColor,
                 modifier = Modifier.padding(vertical = 4.dp)
             )
-            IdeMenuItem("قص")
-            IdeMenuItem("نسخ")
-            IdeMenuItem("لصق")
+            IdeMenuItem(
+                "قص",
+                icon = { Icon(Icons.Default.ContentCut, null, Modifier.size(16.dp)) }
+            )
+            IdeMenuItem(
+                "نسخ",
+                icon = { Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp)) }
+            )
+            IdeMenuItem(
+                "لصق",
+                icon = { Icon(Icons.Default.ContentPaste, null, Modifier.size(16.dp)) }
+            )
         }
         IdeMenuCategory("عرض") {
             IdeMenuItem("ملء الشاشة")
@@ -158,9 +188,14 @@ fun IdeMenuCategory(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun IdeMenuItem(text: String, onClick: () -> Unit = {}) {
+fun IdeMenuItem(
+    text: String,
+    icon: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit = {}
+) {
     DropdownMenuItem(
         text = { Text(text, fontSize = 13.sp, color = IdeColors.TextDefault) },
+        leadingIcon = icon,
         onClick = onClick,
         colors = MenuDefaults.itemColors(
             textColor = IdeColors.TextDefault,

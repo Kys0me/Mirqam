@@ -1,5 +1,11 @@
 package rtlide.editor.render
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,10 +13,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.absoluteOffset
@@ -18,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,10 +39,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -54,6 +67,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.Key
@@ -82,11 +96,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import rtlide.core.document.Caret
@@ -133,20 +152,21 @@ fun EditorCanvas(
     val gutterWidthPx = with(density) { gutterWidth.toPx() }
     // Under the app-wide RTL layout the Row mirrors: the gutter sits on the right
     // and the text canvas starts at x = 0. In LTR the canvas starts after the gutter.
-    val canvasLeftPx = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 0f else gutterWidthPx
+    val canvasLeftPx =
+        if (LocalLayoutDirection.current == LayoutDirection.Rtl) 0f else gutterWidthPx
 
-    val baseStyle = remember(fontSize) {
+    val baseStyle = remember(fontSize, tab.lang.textDirection) {
         TextStyle(
             fontFamily = FontFamily.Monospace,
             fontSize = fontSize.sp,
             color = IdeColors.TextDefault,
-            textDirection = TextDirection.Content,
+            textDirection = if (tab.lang.textDirection == TextDir.RTL) TextDirection.Rtl else TextDirection.Content,
         )
     }
 
     var menuPos by remember { mutableStateOf(Offset.Zero) }
     var showMenu by remember { mutableStateOf(false) }
-    
+
     var showTooltip by remember { mutableStateOf(false) }
     var isTooltipHovered by remember { mutableStateOf(false) }
     var activeTooltipDiags by remember { mutableStateOf<List<Diagnostic>>(emptyList()) }
@@ -160,7 +180,7 @@ fun EditorCanvas(
         if (hoveredDiags.isNotEmpty()) {
             activeTooltipDiags = hoveredDiags
             selectedFixIndex = 0
-            
+
             if (tab.instantTooltip) {
                 showTooltip = true
                 tab.instantTooltip = false
@@ -199,7 +219,8 @@ fun EditorCanvas(
         var start = end
         while (start > 0 && (line[start - 1].isLetterOrDigit() || line[start - 1] == '_')) start--
         val prefix = line.substring(start, end)
-        val remainder = if (item.label.startsWith(prefix)) item.label.substring(prefix.length) else item.label
+        val remainder =
+            if (item.label.startsWith(prefix)) item.label.substring(prefix.length) else item.label
         doc.insert(remainder)
         // IntelliJ inserts parentheses for callables and moves the caret inside
         // when the call takes arguments.
@@ -215,17 +236,24 @@ fun EditorCanvas(
     }
 
     BoxWithConstraints(modifier.background(Color(0xFF1E1E1E))) {
-        val editorWidthPx = if (constraints.hasBoundedWidth) constraints.maxWidth.toFloat() else 1200f
+        val editorWidthPx =
+            if (constraints.hasBoundedWidth) constraints.maxWidth.toFloat() else 1200f
         val canvasWidthPx = (editorWidthPx - gutterWidthPx).coerceAtLeast(100f)
 
-        val layouts: List<TextLayoutResult> = remember(doc.lines, highlighter.version, canvasWidthPx, fontSize) {
+        val visualLines = remember(doc.lines, tab.lang.textDirection) {
             doc.lines.map { line ->
+                highlighter.highlight(line, tab.lang.textDirection == TextDir.RTL)
+            }
+        }
+
+        val layouts = remember(visualLines, canvasWidthPx, fontSize) {
+            visualLines.map { visualLine ->
                 measurer.measure(
-                    text = highlighter.highlight(line),
+                    text = visualLine.annotatedString,
                     style = baseStyle,
                     softWrap = false,
                     maxLines = 1,
-                    layoutDirection = LayoutDirection.Rtl,
+                    layoutDirection = if (tab.lang.textDirection == TextDir.RTL) LayoutDirection.Rtl else LayoutDirection.Ltr,
                 )
             }
         }
@@ -241,9 +269,12 @@ fun EditorCanvas(
             val line = (y / lineHeightPx).toInt()
                 .coerceIn(0, (doc.lines.size - 1).coerceAtLeast(0))
             val layout = layouts.getOrNull(line)
-            val col = if (layout != null) {
+            val visualLine = visualLines.getOrNull(line)
+            val col = if (layout != null && visualLine != null) {
                 val localX = pos.x - originX(layout)
-                layout.getOffsetForPosition(Offset(localX, layout.size.height / 2f))
+                val layoutOffset =
+                    layout.getOffsetForPosition(Offset(localX, layout.size.height / 2f))
+                visualLine.layoutToDoc(layoutOffset)
             } else 0
             return Caret(line, col.coerceIn(0, doc.lineText(line).length))
         }
@@ -266,15 +297,23 @@ fun EditorCanvas(
                             if (event.type == KeyEventType.KeyDown) {
                                 when (event.key) {
                                     Key.DirectionDown -> {
-                                        selectedFixIndex = (selectedFixIndex + 1) % firstDiagWithFixes.fixes.size
+                                        selectedFixIndex =
+                                            (selectedFixIndex + 1) % firstDiagWithFixes.fixes.size
                                         return@onPreviewKeyEvent true
                                     }
+
                                     Key.DirectionUp -> {
-                                        selectedFixIndex = (selectedFixIndex - 1 + firstDiagWithFixes.fixes.size) % firstDiagWithFixes.fixes.size
+                                        selectedFixIndex =
+                                            (selectedFixIndex - 1 + firstDiagWithFixes.fixes.size) % firstDiagWithFixes.fixes.size
                                         return@onPreviewKeyEvent true
                                     }
+
                                     Key.Enter -> {
-                                        tab.applyQuickFix(firstDiagWithFixes.fixes[selectedFixIndex], firstDiagWithFixes.location, firstDiagWithFixes.length)
+                                        tab.applyQuickFix(
+                                            firstDiagWithFixes.fixes[selectedFixIndex],
+                                            firstDiagWithFixes.location,
+                                            firstDiagWithFixes.length
+                                        )
                                         showTooltip = false
                                         return@onPreviewKeyEvent true
                                     }
@@ -282,7 +321,15 @@ fun EditorCanvas(
                             }
                         }
                     }
-                    handleKey(event, doc, completion, tab, indent, brackets, tab.lang.textDirection) { applyCompletion() }
+                    handleKey(
+                        event,
+                        doc,
+                        completion,
+                        tab,
+                        indent,
+                        brackets,
+                        tab.lang.textDirection
+                    ) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
                 // Keyed on layouts/diagnostics: the handler must be restarted after
@@ -311,8 +358,8 @@ fun EditorCanvas(
                                 // as in IntelliJ; Information/Hint stay on Alt+Enter.
                                 val diags = diagnostics.filter { d ->
                                     (d.severity == Severity.Error || d.severity == Severity.Warning) &&
-                                    d.location.line - 1 == caret.line &&
-                                    caret.col in (d.location.column - 1)..<(d.location.column - 1 + d.length)
+                                            d.location.line - 1 == caret.line &&
+                                            caret.col in (d.location.column - 1)..<(d.location.column - 1 + d.length)
                                 }
                                 if (diags != tab.hoveredDiagnostics) tab.hoveredDiagnostics = diags
                             }
@@ -353,11 +400,13 @@ fun EditorCanvas(
                                             val caret = hitTest(pos, scrolled = true)
                                             doc.selectWordAt(caret)
                                         }
+
                                         3 -> {
                                             val caret = hitTest(pos, scrolled = true)
                                             doc.selectLineAt(caret.line)
                                             clickCount = 0
                                         }
+
                                         else -> {
                                             doc.caret = hitTest(pos, scrolled = true)
                                             doc.selectionAnchor = null
@@ -408,15 +457,22 @@ fun EditorCanvas(
                         val (start, end) = range
                         for (i in start.line..end.line) {
                             val layout = layouts.getOrNull(i) ?: continue
+                            val visualLine = visualLines.getOrNull(i) ?: continue
                             val ox = originX(layout)
                             val ty = textY(i, layout)
                             val lineLen = doc.lineText(i).length
                             val s = if (i == start.line) start.col else 0
                             val e = if (i == end.line) end.col else lineLen
                             if (s < e) {
-                                val path = layout.getPathForRange(s, e)
+                                val path = layout.getPathForRange(
+                                    visualLine.docToLayout(s),
+                                    visualLine.docToLayout(e)
+                                )
                                 translate(ox, ty) {
-                                    drawPath(path, color = IdeColors.SelectionBackground.copy(alpha = 0.4f))
+                                    drawPath(
+                                        path,
+                                        color = IdeColors.SelectionBackground.copy(alpha = 0.4f)
+                                    )
                                 }
                             } else if (i != end.line) {
                                 drawRect(
@@ -434,15 +490,17 @@ fun EditorCanvas(
 
                     for (diag in diagnostics) {
                         if (diag.severity == Severity.Information || diag.severity == Severity.Hint) continue
-                        
+
                         val lineIndex = diag.location.line - 1
                         val layout = layouts.getOrNull(lineIndex) ?: continue
+                        val visualLine = visualLines.getOrNull(lineIndex) ?: continue
                         val lineStr = doc.lineText(lineIndex)
                         // Clamp to the visible line so diagnostics anchored at or
                         // past the end of the line (e.g. incomplete statements)
                         // still show a squiggle instead of being dropped.
                         val start = (diag.location.column - 1).coerceIn(0, lineStr.length)
-                        val end = (diag.location.column - 1 + diag.length).coerceIn(start, lineStr.length)
+                        val end =
+                            (diag.location.column - 1 + diag.length).coerceIn(start, lineStr.length)
 
                         val ox = originX(layout)
                         val ty = textY(lineIndex, layout)
@@ -453,11 +511,14 @@ fun EditorCanvas(
                         }
 
                         val bounds = if (end > start) {
-                            layout.getPathForRange(start, end).getBounds()
+                            layout.getPathForRange(
+                                visualLine.docToLayout(start),
+                                visualLine.docToLayout(end)
+                            ).getBounds()
                         } else {
                             // Zero-width range at the line end: draw a short marker
                             // extending leftwards, following the RTL text flow.
-                            val cr = layout.getCursorRect(start)
+                            val cr = layout.getCursorRect(visualLine.docToLayout(start))
                             Rect(cr.left - 10f, cr.top, cr.left + 2f, cr.bottom)
                         }
                         translate(ox, ty) {
@@ -478,7 +539,8 @@ fun EditorCanvas(
                     }
 
                     val layout = layouts.getOrNull(cl)
-                    if (layout != null) {
+                    val visualLine = visualLines.getOrNull(cl)
+                    if (layout != null && visualLine != null) {
                         val lineStr = doc.lineText(cl)
                         val col = doc.caret.col.coerceIn(0, lineStr.length)
                         val ox = originX(layout)
@@ -486,7 +548,7 @@ fun EditorCanvas(
 
                         val match = Brackets.matchOnLine(lineStr, col, brackets)
                         if (match != null && match in lineStr.indices) {
-                            val bb = layout.getBoundingBox(match)
+                            val bb = layout.getBoundingBox(visualLine.docToLayout(match))
                             drawRect(
                                 color = Color(0x5539A169),
                                 topLeft = Offset(ox + bb.left, ty + bb.top),
@@ -494,7 +556,7 @@ fun EditorCanvas(
                             )
                         }
 
-                        val cr = layout.getCursorRect(col)
+                        val cr = layout.getCursorRect(visualLine.docToLayout(col))
                         drawLine(
                             color = Color(0xFFAEAFAD),
                             start = Offset(ox + cr.left, ty),
@@ -509,8 +571,12 @@ fun EditorCanvas(
         if (completion.visible) {
             val cl = doc.caret.line.coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(cl)
+            val visualLine = visualLines.getOrNull(cl)
             val col = doc.caret.col.coerceIn(0, doc.lineText(cl).length)
-            val caretX = if (layout != null) canvasLeftPx + originX(layout) + layout.getCursorRect(col).left else canvasLeftPx
+            val caretX =
+                if (layout != null && visualLine != null) canvasLeftPx + originX(layout) + layout.getCursorRect(
+                    visualLine.docToLayout(col)
+                ).left else canvasLeftPx
             val caretY = cl * lineHeightPx + lineHeightPx - vscroll.value
             Box(
                 Modifier
@@ -523,27 +589,35 @@ fun EditorCanvas(
 
         if (showTooltip && activeTooltipDiags.isNotEmpty()) {
             val primaryDiag = activeTooltipDiags.first()
-            val lineIndex = (primaryDiag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
+            val lineIndex =
+                (primaryDiag.location.line - 1).coerceIn(0, layouts.lastIndex.coerceAtLeast(0))
             val layout = layouts.getOrNull(lineIndex)
+            val visualLine = visualLines.getOrNull(lineIndex)
             val col = (primaryDiag.location.column - 1).coerceIn(0, doc.lineText(lineIndex).length)
-            val x = if (layout != null) canvasLeftPx + originX(layout) + layout.getCursorRect(col).left else canvasLeftPx
+            val x =
+                if (layout != null && visualLine != null) canvasLeftPx + originX(layout) + layout.getCursorRect(
+                    visualLine.docToLayout(col)
+                ).left else canvasLeftPx
             val lineTop = lineIndex * lineHeightPx - vscroll.value
             val lineBottom = lineTop + lineHeightPx
-            val editorHeightPx = if (constraints.hasBoundedHeight) constraints.maxHeight.toFloat() else Float.MAX_VALUE
+            val editorHeightPx =
+                if (constraints.hasBoundedHeight) constraints.maxHeight.toFloat() else Float.MAX_VALUE
             var tooltipSize by remember { mutableStateOf(IntSize.Zero) }
-            
+
             Box(
                 Modifier
                     .align(AbsoluteAlignment.TopLeft)
                     .absoluteOffset {
                         // Clamp inside the editor; flip above the line when the
                         // popup would not fit below — same policy as IntelliJ.
-                        val tx = x.coerceIn(0f, (editorWidthPx - tooltipSize.width).coerceAtLeast(0f))
-                        val ty = if (lineBottom + tooltipSize.height > editorHeightPx && lineTop - tooltipSize.height >= 0f) {
-                            lineTop - tooltipSize.height
-                        } else {
-                            lineBottom
-                        }
+                        val tx =
+                            x.coerceIn(0f, (editorWidthPx - tooltipSize.width).coerceAtLeast(0f))
+                        val ty =
+                            if (lineBottom + tooltipSize.height > editorHeightPx && lineTop - tooltipSize.height >= 0f) {
+                                lineTop - tooltipSize.height
+                            } else {
+                                lineBottom
+                            }
                         IntOffset(tx.roundToInt(), ty.roundToInt())
                     }
                     .onSizeChanged { tooltipSize = it }
@@ -552,16 +626,18 @@ fun EditorCanvas(
                             while (true) {
                                 val event = awaitPointerEvent()
                                 when (event.type) {
-                                    PointerEventType.Enter, PointerEventType.Move -> isTooltipHovered = true
+                                    PointerEventType.Enter, PointerEventType.Move -> isTooltipHovered =
+                                        true
+
                                     PointerEventType.Exit -> isTooltipHovered = false
                                 }
                             }
                         }
                     }
             ) {
-                ProblemTooltip(activeTooltipDiags, selectedFixIndex) { fix, diag -> 
+                ProblemTooltip(activeTooltipDiags, selectedFixIndex) { fix, diag ->
                     tab.applyQuickFix(fix, diag.location, diag.length)
-                    showTooltip = false 
+                    showTooltip = false
                     activeTooltipDiags = emptyList()
                 }
             }
@@ -588,16 +664,45 @@ fun EditorCanvas(
                         )
                     }
             ) {
-                DropdownMenu(
+                IdeDropdownMenu(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false },
-                    modifier = Modifier.background(IdeColors.TabInactiveBackground).border(1.dp, IdeColors.BorderColor)
                 ) {
-                    IdeMenuItem("قص", onClick = { doc.cutSelection(); showMenu = false })
-                    IdeMenuItem("نسخ", onClick = { doc.copySelection(); showMenu = false })
-                    IdeMenuItem("لصق", onClick = { doc.paste(); showMenu = false })
-                    HorizontalDivider(color = IdeColors.BorderColor, modifier = Modifier.padding(vertical = 4.dp))
-                    IdeMenuItem("تحديد الكل", onClick = { doc.selectAll(); showMenu = false })
+                    IdeMenuItem(
+                        "قص",
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCut,
+                                contentDescription = "Cut"
+                            )
+                        },
+                        onClick = { doc.cutSelection(); showMenu = false }
+                    )
+                    IdeMenuItem(
+                        "نسخ",
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCopy,
+                                contentDescription = "Copy"
+                            )
+                        },
+                        onClick = { doc.copySelection(); showMenu = false }
+                    )
+                    IdeMenuItem(
+                        "لصق",
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Filled.ContentPaste,
+                                contentDescription = "Paste"
+                            )
+                        },
+                        onClick = { doc.paste(); showMenu = false }
+                    )
+                    IdeMenuDivider()
+                    IdeMenuItem(
+                        "تحديد الكل",
+                        onClick = { doc.selectAll(); showMenu = false }
+                    )
                 }
             }
         }
@@ -674,11 +779,15 @@ fun QuickFixDialog(
                         .onPreviewKeyEvent {
                             if (it.type == KeyEventType.KeyDown) {
                                 when (it.key) {
-                                    Key.Enter -> { 
+                                    Key.Enter -> {
                                         onConfirm()
-                                        true 
+                                        true
                                     }
-                                    Key.Escape -> { onDismiss(); true }
+
+                                    Key.Escape -> {
+                                        onDismiss(); true
+                                    }
+
                                     else -> false
                                 }
                             } else false
@@ -692,7 +801,9 @@ fun QuickFixDialog(
                     Spacer(Modifier.width(8.dp))
                     androidx.compose.material3.Button(
                         onClick = onConfirm,
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = IdeColors.StatusbarBackground),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = IdeColors.StatusbarBackground
+                        ),
                         shape = RoundedCornerShape(4.dp)
                     ) {
                         Text("تأكيد", color = Color.White, fontSize = 13.sp)
@@ -703,21 +814,149 @@ fun QuickFixDialog(
     }
 }
 
+// ---------- Custom IDE-style dropdown menu ----------
+
 @Composable
-private fun IdeMenuItem(text: String, onClick: () -> Unit = {}) {
-    DropdownMenuItem(
-        text = { Text(text, fontSize = 13.sp, color = IdeColors.TextDefault) },
-        onClick = onClick,
-        colors = MenuDefaults.itemColors(
-            textColor = IdeColors.TextDefault,
+fun IdeDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    offset: IntOffset = IntOffset.Zero,
+    minWidth: Dp = 180.dp,
+    maxWidth: Dp = 480.dp,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    if (!expanded)
+        return
+
+    val transitionState = remember { MutableTransitionState(false) }
+    transitionState.targetState = true
+
+    val positionProvider = remember(offset) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                var x = anchorBounds.left + offset.x
+                var y = anchorBounds.top + offset.y
+
+                // IntelliJ flips the menu when it would overflow the window edge
+                if (x + popupContentSize.width > windowSize.width) {
+                    x = (anchorBounds.left - popupContentSize.width + offset.x)
+                        .coerceAtLeast(0)
+                }
+                if (y + popupContentSize.height > windowSize.height) {
+                    y = (windowSize.height - popupContentSize.height).coerceAtLeast(0)
+                }
+                return IntOffset(x, y)
+            }
+        }
+    }
+
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismissRequest,
+        properties = PopupProperties(focusable = true)
+    ) {
+        AnimatedVisibility(
+            visibleState = transitionState,
+            enter = fadeIn(tween(90)) + scaleIn(
+                initialScale = 0.96f,
+                animationSpec = tween(90),
+                transformOrigin = TransformOrigin(0f, 0f)
+            ),
+            exit = fadeOut(tween(60))
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(min = minWidth, maxWidth)
+                    .shadow(4.dp, RoundedCornerShape(2.dp), clip = false)
+                    .background(IdeColors.TabInactiveBackground, RoundedCornerShape(2.dp))
+                    .border(1.dp, IdeColors.BorderColor, RoundedCornerShape(2.dp))
+                    .padding(vertical = 4.dp),
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+fun IdeMenuItem(
+    text: String,
+    shortcut: String? = null,
+    icon: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val highlighted = isHovered && enabled
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 24.dp)
+            .hoverable(interactionSource)
+            .background(if (highlighted) IdeColors.SelectionBackground else Color.Transparent)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Fixed icon gutter, like IntelliJ's 16dp left column — present even when empty
+        // so text aligns across items with and without icons
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            icon?.invoke()
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            color = when {
+                !enabled -> IdeColors.TextDisabled
+                highlighted -> IdeColors.MenuSelectionText
+                else -> IdeColors.TextDefault
+            },
+            modifier = Modifier.weight(1f)
         )
+        if (shortcut != null) {
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = shortcut,
+                fontSize = 12.sp,
+                color = when {
+                    !enabled -> IdeColors.TextDisabled
+                    highlighted -> IdeColors.MenuSelectionText
+                    else -> IdeColors.TextSecondary
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun IdeMenuDivider() {
+    HorizontalDivider(
+        color = IdeColors.BorderColor,
+        thickness = 1.dp,
+        modifier = Modifier.padding(horizontal = 0.dp, vertical = 4.dp)
     )
 }
 
 /** IntelliJ (New UI, dark) inspection tooltip: severity icon + message,
  *  a full-width separator, then quick fixes as links with the Alt+Enter hint. */
 @Composable
-fun ProblemTooltip(diags: List<Diagnostic>, selectedIndex: Int, onQuickFix: (rtlide.lang.analysis.QuickFix, Diagnostic) -> Unit) {
+fun ProblemTooltip(
+    diags: List<Diagnostic>,
+    selectedIndex: Int,
+    onQuickFix: (rtlide.lang.analysis.QuickFix, Diagnostic) -> Unit
+) {
     val background = Color(0xFF2B2D30)
     val borderColor = Color(0xFF43454A)
     val separator = Color(0xFF393B40)
@@ -740,7 +979,7 @@ fun ProblemTooltip(diags: List<Diagnostic>, selectedIndex: Int, onQuickFix: (rtl
                 Spacer(Modifier.width(8.dp))
                 Text(diag.message, color = Color(0xFFDFE1E5), fontSize = 13.sp, lineHeight = 18.sp)
             }
-            
+
             if (diag.fixes.isNotEmpty()) {
                 HorizontalDivider(color = separator)
                 Column(Modifier.padding(vertical = 4.dp)) {
@@ -755,7 +994,12 @@ fun ProblemTooltip(diags: List<Diagnostic>, selectedIndex: Int, onQuickFix: (rtl
                                 .padding(horizontal = 12.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(fix.label, color = Color(0xFF548AF7), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            Text(
+                                fix.label,
+                                color = Color(0xFF548AF7),
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f)
+                            )
                             if (fIndex == 0) {
                                 Spacer(Modifier.width(24.dp))
                                 Text("Alt+Enter", color = Color(0xFF6F737A), fontSize = 12.sp)
@@ -783,8 +1027,15 @@ private fun SeverityIcon(severity: Severity) {
                     }
                     drawPath(triangle, Color(0xFFF2C55C))
                 }
-                Text("!", color = Color(0xFF323232), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
+                Text(
+                    "!",
+                    color = Color(0xFF323232),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
             }
+
             else -> {
                 val bg = if (severity == Severity.Error) Color(0xFFDB5C5C) else Color(0xFF548AF7)
                 Box(
@@ -807,7 +1058,13 @@ private fun refreshCompletion(
     // Scope- and context-aware suggestions computed by the language engine
     // from the latest analysis snapshot.
     completion.show(
-        CompletionEngine.suggest(doc.lines, doc.caret.line, doc.caret.col, tab.completionModel, explicit)
+        CompletionEngine.suggest(
+            doc.lines,
+            doc.caret.line,
+            doc.caret.col,
+            tab.completionModel,
+            explicit
+        )
     )
 }
 
@@ -822,36 +1079,58 @@ private fun handleKey(
     applyCompletion: () -> Unit,
 ): Boolean {
     if (e.type != KeyEventType.KeyDown) return false
-    
+
     val isShift = e.isShiftPressed
     val isCtrl = e.isCtrlPressed
 
     if (isCtrl) {
         when (e.key) {
-            Key.C -> { doc.copySelection(); return true }
-            Key.V -> { doc.paste(); return true }
-            Key.X -> { doc.cutSelection(); return true }
-            Key.A -> { doc.selectAll(); return true }
-            Key.Z -> { doc.undo(); return true }
-            Key.Y -> { doc.redo(); return true }
+            Key.C -> {
+                doc.copySelection(); return true
+            }
+
+            Key.V -> {
+                doc.paste(); return true
+            }
+
+            Key.X -> {
+                doc.cutSelection(); return true
+            }
+
+            Key.A -> {
+                doc.selectAll(); return true
+            }
+
+            Key.Z -> {
+                doc.undo(); return true
+            }
+
+            Key.Y -> {
+                doc.redo(); return true
+            }
+
             Key.DirectionLeft -> {
                 val delta = if (textDirection == TextDir.RTL) 1 else -1
                 doc.moveCaretByWord(delta, isShift)
                 return true
             }
+
             Key.DirectionRight -> {
                 val delta = if (textDirection == TextDir.RTL) -1 else 1
                 doc.moveCaretByWord(delta, isShift)
                 return true
             }
+
             Key.Backspace -> {
                 doc.deleteByWord(-1)
                 return true
             }
+
             Key.Delete -> {
                 doc.deleteByWord(1)
                 return true
             }
+
             Key.Spacebar -> {
                 // Ctrl+Space: explicit completion, as in IntelliJ.
                 refreshCompletion(doc, completion, tab, explicit = true)
@@ -865,14 +1144,19 @@ private fun handleKey(
             doc.moveCaretToLineStart(isShift)
             return true
         }
+
         Key.MoveEnd -> {
             doc.moveCaretToLineEnd(isShift)
             return true
         }
+
         Key.Escape -> {
-            if (completion.visible) { completion.hide(); return true }
+            if (completion.visible) {
+                completion.hide(); return true
+            }
             return false
         }
+
         Key.Backspace -> {
             if (!doc.hasSelection) {
                 val line = doc.lineText(doc.caret.line)
@@ -880,9 +1164,10 @@ private fun handleKey(
                 if (c > 0 && c < line.length) {
                     val b = line[c - 1]
                     val a = line[c]
-                    val isPair = brackets.any { it.open == b.toString() && it.close == a.toString() } ||
-                        (b == '(' && a == ')') || (b == '[' && a == ']') || (b == '{' && a == '}') ||
-                        (b == '"' && a == '"') || (b == '\'' && a == '\'')
+                    val isPair =
+                        brackets.any { it.open == b.toString() && it.close == a.toString() } ||
+                                (b == '(' && a == ')') || (b == '[' && a == ']') || (b == '{' && a == '}') ||
+                                (b == '"' && a == '"') || (b == '\'' && a == '\'')
                     if (isPair) {
                         doc.deleteForward()
                     }
@@ -900,16 +1185,23 @@ private fun handleKey(
             refreshCompletion(doc, completion, tab)
             return true
         }
+
         Key.Delete -> {
             doc.deleteForward()
             return true
         }
+
         Key.Tab -> {
-            if (completion.visible) { applyCompletion(); return true }
+            if (completion.visible) {
+                applyCompletion(); return true
+            }
             doc.insert(if (indent.useSpaces) " ".repeat(indent.indentSize) else "\t"); return true
         }
+
         Key.Enter -> {
-            if (completion.visible) { applyCompletion(); return true }
+            if (completion.visible) {
+                applyCompletion(); return true
+            }
             val currentLine = doc.lineText(doc.caret.line)
             val startLine = doc.caret.line
             val result = calculateSmartEnter(currentLine, indent, doc.text(), startLine)
@@ -917,34 +1209,43 @@ private fun handleKey(
             doc.caret = Caret(startLine + result.caretLineOffset, result.caretColOffset)
             completion.hide(); return true
         }
+
         Key.DirectionUp -> {
-            if (completion.visible) { completion.selected = (completion.selected - 1).coerceAtLeast(0); return true }
+            if (completion.visible) {
+                completion.selected = (completion.selected - 1).coerceAtLeast(0); return true
+            }
             doc.moveCaret(-1, 0, isShift); return true
         }
+
         Key.DirectionDown -> {
             if (completion.visible) {
-                completion.selected = (completion.selected + 1).coerceAtMost(completion.items.lastIndex.coerceAtLeast(0)); return true
+                completion.selected = (completion.selected + 1).coerceAtMost(
+                    completion.items.lastIndex.coerceAtLeast(0)
+                ); return true
             }
             doc.moveCaret(1, 0, isShift); return true
         }
+
         Key.DirectionLeft -> {
             completion.hide()
             val delta = if (textDirection == TextDir.RTL) 1 else -1
             doc.moveCaret(0, delta, isShift)
             return true
         }
+
         Key.DirectionRight -> {
             completion.hide()
             val delta = if (textDirection == TextDir.RTL) -1 else 1
             doc.moveCaret(0, delta, isShift)
             return true
         }
+
         else -> {
             val ch = e.awtEventOrNull?.keyChar
             if (ch != null && ch != CHAR_UNDEFINED && !ch.isISOControl()) {
                 val line = doc.lineText(doc.caret.line)
                 val c = doc.caret.col
-                
+
                 // Type-over: if typing the closing character that is already there, just move caret
                 if (c < line.length && line[c] == ch && ")]}\"'".contains(ch)) {
                     doc.moveCaret(0, 1, false)
