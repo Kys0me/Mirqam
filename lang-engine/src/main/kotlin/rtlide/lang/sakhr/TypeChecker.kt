@@ -699,10 +699,10 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         
         // Report unused variables
         for ((name, info) in lastScope.variables) {
-            if (!info.isUsed && name != "السياق") {
+            if (!info.isUsed && name != "السياق" && name != "_") {
                 val fix = QuickFix("حذف آمن", if (info.isParameter) "SAFE_DELETE_PARAM" else "SAFE_DELETE_VAR", info.fixOffset, 0, info.fixLength)
                 diagnostics.reportWarning("المتغير '$name' غير مستخدم.", info.location, name.length, listOf(fix))
-            } else if (!info.isConstant && !info.isReassigned && name != "السياق" && !info.isParameter) {
+            } else if (!info.isConstant && !info.isReassigned && name != "السياق" && !info.isParameter && name != "_") {
                  diagnostics.reportWarning("يفضل استخدام 'ألزم' لـ '$name'.", info.location, name.length, listOf(QuickFix("استخدام 'ألزم'", "ألزم")))
             }
         }

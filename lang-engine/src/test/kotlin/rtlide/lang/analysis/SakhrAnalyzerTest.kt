@@ -251,4 +251,11 @@ class SakhrAnalyzerTest {
         val diags = analyzer.analyze(source).diagnostics
         assertTrue(diags.any { it.severity == Severity.Error && it.message.contains("نوع اختياري") }, "Should have error for setting property on optional")
     }
+
+    @Test
+    fun testUnderscoreVariableNoWarning() {
+        val source = "ليكن _ = 10"
+        val diagnostics = analyzer.analyze(source).diagnostics
+        assertTrue(diagnostics.none { it.severity == Severity.Warning }, "Should have no warning for '_'")
+    }
 }
