@@ -24,10 +24,9 @@ class SakhrAnalyzerTest {
         val fix = unused.fixes.find { it.replacement == "SAFE_DELETE_VAR" }
         assertTrue(fix != null, "Should have safe delete fix")
         
-        // startColOffset should reach back to 'ليكن'
-        // 'س' is at col 5. 'ليكن' is at col 0. offset = -5.
+        // 'س' starts at col 6 (1-based). 'ليكن' starts at col 1. Offset = 1 - 6 = -5.
         assertEquals(-5, fix.startColOffset)
-        // endColOffset should reach the end of the line (length 20) starting from 'ليكن'
+        // fixLength is total length from 'ليكن' to end of '5' (col 20 + length 1 = 21). 21 - 1 = 20.
         assertEquals(20, fix.endColOffset)
     }
 
@@ -77,7 +76,7 @@ class SakhrAnalyzerTest {
     fun testWarningForUnusedFunctionParams() {
         val sourceUnused = """
             إجراء تجربة(س: رقم) ابدأ
-                رجع
+                رد
             انتهى
             تجربة(5)
         """.trimIndent()
@@ -92,7 +91,7 @@ class SakhrAnalyzerTest {
             أكتب(س)
             إجراء دالة(أ) ابدأ
                 أكتب(أ)
-                رجع أ
+                رد أ
             انتهى
             دالة(س)
         """.trimIndent()
@@ -118,10 +117,10 @@ class SakhrAnalyzerTest {
             ما دام (س < 10) كرر
                 س += 1
                 إن كان (س == 5) إذن ابدأ
-                    واصل
+                    امض
                 انتهى
                 إن كان (س > 8) إذن ابدأ
-                    اكسر
+                    اكفف
                 انتهى
             انتهى
             
@@ -137,5 +136,119 @@ class SakhrAnalyzerTest {
         val diags = analyzer.analyze(source).diagnostics
         val errors = diags.filter { it.severity == Severity.Error }
         assertTrue(errors.isEmpty(), "Should have no errors. Errors: ${errors.joinToString { it.message }}")
+    }
+
+    @Test
+    fun testSimpleStruct() {
+        val source = """
+            بنية س ابدأ ح: رقم انتهى
+            ليكن أ = س(ح = 10)
+            أكتب(أ.ح)
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.none { it.severity == Severity.Error }, "Should have no errors. Errors: ${diags.filter { it.severity == Severity.Error }.joinToString { it.message }}")
+    }
+
+    @Test
+    fun testStructConstructorWithNamedArgs() {
+        val source = """
+            بنية س ابدأ ح: رقم انتهى
+            ليكن أ = س(ح = 10)
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.none { it.severity == Severity.Error }, "Should have no errors. Errors: ${diags.filter { it.severity == Severity.Error }.joinToString { it.message }}")
+    }
+
+    @Test
+    fun testAnonymousStructPropertySetting() {
+        val source = """
+            بنية س ابدأ ح: رقم انتهى
+            س(ح = 10).ح = 10
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.none { it.severity == Severity.Error }, "Should have no errors")
+    }
+
+    @Test
+    fun testStructPropertySetting() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+                ص: رقم
+            انتهى
+            ليكن ن = نقطة(س = 10، ص = 20)
+            ن.س = 10
+            ن.ع = 20
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.message.contains("ع") && it.severity == Severity.Error }, "Should have error for missing property 'ع'")
+    }
+
+    @Test
+    fun testStructPositionalConstructor() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+                ص: رقم = 0
+            انتهى
+            ليكن ن = نقطة(10)
+            ليكن ن2 = نقطة(10، 20)
+            ليكن ن3 = نقطة(10، 20، 30)
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.message.contains("أكثر من عدد حقول") }, "Should have error for too many args")
+    }
+
+    @Test
+    fun testStructMissingRequiredField() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+                ص: رقم
+            انتهى
+            ليكن ن = نقطة(س = 10)
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.message.contains("ص") && it.message.contains("لم يتم تعيينه") }, "Should have error for missing required field")
+    }
+
+    @Test
+    fun testStructTypeMismatchInConstructor() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+            انتهى
+            ليكن ن = نقطة(س = "نص")
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.message.contains("لا يتطابق") && it.severity == Severity.Error }, "Should have type mismatch error")
+    }
+
+    @Test
+    fun testOptionalTypeWarning() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+            انتهى
+            إجراء تجربة(ن: نقطة؟) ابدأ
+                ليكن س = ن.س
+            انتهى
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.severity == Severity.Warning && it.message.contains("نوع اختياري") }, "Should have warning for property access on optional")
+    }
+
+    @Test
+    fun testOptionalTypeSetError() {
+        val source = """
+            بنية نقطة ابدأ
+                س: رقم
+            انتهى
+            إجراء تجربة(ن: نقطة؟) ابدأ
+                ن.س = 10
+            انتهى
+        """.trimIndent()
+        val diags = analyzer.analyze(source).diagnostics
+        assertTrue(diags.any { it.severity == Severity.Error && it.message.contains("نوع اختياري") }, "Should have error for setting property on optional")
     }
 }

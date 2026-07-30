@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -99,6 +100,7 @@ import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Severity
 import rtlide.lang.indent.Brackets
 import rtlide.lang.indent.calculateSmartEnter
+import rtlide.lang.intelligence.CompletionEngine
 import rtlide.lang.schema.BracketPair
 import rtlide.lang.schema.IndentRules
 import rtlide.lang.schema.TextDir
@@ -115,10 +117,6 @@ fun EditorCanvas(
     val doc = tab.document
     val highlighter = tab.highlighter
     val diagnostics = tab.diagnostics
-    val keywords = remember(tab.lang) {
-        (tab.lang.grammar.controlKeywords + tab.lang.grammar.keywords + tab.lang.grammar.builtins + tab.lang.grammar.constants)
-            .distinct()
-    }
     val brackets = tab.lang.brackets
     val indent = tab.lang.indent
 
@@ -194,18 +192,25 @@ fun EditorCanvas(
         }
     }
 
-    val allSuggestions = remember(keywords, tab.symbols) {
-        (keywords + tab.symbols).distinct()
-    }
-
     fun applyCompletion() {
         val item = completion.items.getOrNull(completion.selected) ?: return
         val line = doc.lineText(doc.caret.line)
         val end = doc.caret.col.coerceIn(0, line.length)
         var start = end
-        while (start > 0 && (line[start - 1].isLetter() || line[start - 1] == '_')) start--
+        while (start > 0 && (line[start - 1].isLetterOrDigit() || line[start - 1] == '_')) start--
         val prefix = line.substring(start, end)
-        doc.insert(if (item.length >= prefix.length) item.substring(prefix.length) else item)
+        val remainder = if (item.label.startsWith(prefix)) item.label.substring(prefix.length) else item.label
+        doc.insert(remainder)
+        // IntelliJ inserts parentheses for callables and moves the caret inside
+        // when the call takes arguments.
+        if (item.paramCount >= 0) {
+            val after = doc.lineText(doc.caret.line)
+            val c = doc.caret.col
+            if (c >= after.length || after[c] != '(') {
+                doc.insert("()")
+                if (item.paramCount > 0) doc.moveCaret(0, -1, false)
+            }
+        }
         completion.hide()
     }
 
@@ -277,7 +282,7 @@ fun EditorCanvas(
                             }
                         }
                     }
-                    handleKey(event, doc, completion, allSuggestions, indent, brackets, tab.lang.textDirection) { applyCompletion() }
+                    handleKey(event, doc, completion, tab, indent, brackets, tab.lang.textDirection) { applyCompletion() }
                 }
                 .verticalScroll(vscroll)
                 // Keyed on layouts/diagnostics: the handler must be restarted after
@@ -433,9 +438,11 @@ fun EditorCanvas(
                         val lineIndex = diag.location.line - 1
                         val layout = layouts.getOrNull(lineIndex) ?: continue
                         val lineStr = doc.lineText(lineIndex)
-                        val start = diag.location.column - 1
-                        val end = (start + diag.length).coerceAtMost(lineStr.length)
-                        if (start !in 0..<end) continue
+                        // Clamp to the visible line so diagnostics anchored at or
+                        // past the end of the line (e.g. incomplete statements)
+                        // still show a squiggle instead of being dropped.
+                        val start = (diag.location.column - 1).coerceIn(0, lineStr.length)
+                        val end = (diag.location.column - 1 + diag.length).coerceIn(start, lineStr.length)
 
                         val ox = originX(layout)
                         val ty = textY(lineIndex, layout)
@@ -445,9 +452,15 @@ fun EditorCanvas(
                             else -> Color.Gray
                         }
 
-                        val path = layout.getPathForRange(start, end)
+                        val bounds = if (end > start) {
+                            layout.getPathForRange(start, end).getBounds()
+                        } else {
+                            // Zero-width range at the line end: draw a short marker
+                            // extending leftwards, following the RTL text flow.
+                            val cr = layout.getCursorRect(start)
+                            Rect(cr.left - 10f, cr.top, cr.left + 2f, cr.bottom)
+                        }
                         translate(ox, ty) {
-                            val bounds = path.getBounds()
                             val squiggleY = bounds.bottom
                             val squigglePath = Path().apply {
                                 moveTo(bounds.left, squiggleY)
@@ -785,24 +798,24 @@ private fun SeverityIcon(severity: Severity) {
     }
 }
 
-private fun refreshCompletion(doc: Document, completion: CompletionState, suggestions: List<String>) {
-    val line = doc.lineText(doc.caret.line)
-    val end = doc.caret.col.coerceIn(0, line.length)
-    var start = end
-    while (start > 0 && (line[start - 1].isLetter() || line[start - 1] == '_')) start--
-    val prefix = line.substring(start, end)
-    if (prefix.isNotEmpty()) {
-        completion.show(suggestions.filter { it.startsWith(prefix) && it != prefix }.take(8))
-    } else {
-        completion.hide()
-    }
+private fun refreshCompletion(
+    doc: Document,
+    completion: CompletionState,
+    tab: EditorTab,
+    explicit: Boolean = false
+) {
+    // Scope- and context-aware suggestions computed by the language engine
+    // from the latest analysis snapshot.
+    completion.show(
+        CompletionEngine.suggest(doc.lines, doc.caret.line, doc.caret.col, tab.completionModel, explicit)
+    )
 }
 
 private fun handleKey(
     e: KeyEvent,
     doc: Document,
     completion: CompletionState,
-    suggestions: List<String>,
+    tab: EditorTab,
     indent: IndentRules,
     brackets: List<BracketPair>,
     textDirection: TextDir,
@@ -837,6 +850,11 @@ private fun handleKey(
             }
             Key.Delete -> {
                 doc.deleteByWord(1)
+                return true
+            }
+            Key.Spacebar -> {
+                // Ctrl+Space: explicit completion, as in IntelliJ.
+                refreshCompletion(doc, completion, tab, explicit = true)
                 return true
             }
         }
@@ -879,7 +897,7 @@ private fun handleKey(
             } else {
                 doc.backspace()
             }
-            refreshCompletion(doc, completion, suggestions)
+            refreshCompletion(doc, completion, tab)
             return true
         }
         Key.Delete -> {
@@ -947,7 +965,7 @@ private fun handleKey(
                 } else {
                     doc.insert(ch.toString())
                 }
-                refreshCompletion(doc, completion, suggestions)
+                refreshCompletion(doc, completion, tab)
                 return true
             }
             return false

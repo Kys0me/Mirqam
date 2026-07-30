@@ -13,7 +13,10 @@ class SymbolExtractor {
             is Stmt.Expression -> extractFromExpr(stmt.expression, symbols)
             is Stmt.Function -> {
                 symbols.add(stmt.name.lexeme)
-                stmt.params.forEach { symbols.add(it.name.lexeme) }
+                stmt.params.forEach { 
+                    symbols.add(it.name.lexeme)
+                    it.defaultValue?.let { d -> extractFromExpr(d, symbols) }
+                }
                 stmt.body.forEach { extractFromStmt(it, symbols) }
             }
             is Stmt.If -> {
@@ -33,14 +36,22 @@ class SymbolExtractor {
             }
             is Stmt.Break, is Stmt.Continue -> { /* no symbols */ }
             is Stmt.Let -> {
-                symbols.add(stmt.name.lexeme)
+                stmt.names.forEach { symbols.add(it.lexeme) }
                 stmt.initializer?.let { extractFromExpr(it, symbols) }
             }
             is Stmt.Const -> {
-                symbols.add(stmt.name.lexeme)
+                stmt.names.forEach { symbols.add(it.lexeme) }
                 extractFromExpr(stmt.initializer, symbols)
             }
             is Stmt.Return -> stmt.value?.let { extractFromExpr(it, symbols) }
+            is Stmt.Raise -> extractFromExpr(stmt.message, symbols)
+            is Stmt.Struct -> {
+                symbols.add(stmt.name.lexeme)
+                stmt.fields.forEach { field ->
+                    symbols.add(field.name.lexeme)
+                    field.initializer?.let { i -> extractFromExpr(i, symbols) }
+                }
+            }
         }
     }
 
@@ -73,6 +84,15 @@ class SymbolExtractor {
             }
             is Expr.Context -> { /* context is a keyword */ }
             is Expr.Assignment -> {
+                symbols.add(expr.name.lexeme)
+                extractFromExpr(expr.value, symbols)
+            }
+            is Expr.Index -> {
+                extractFromExpr(expr.obj, symbols)
+                extractFromExpr(expr.index, symbols)
+            }
+            is Expr.Set -> {
+                extractFromExpr(expr.obj, symbols)
                 symbols.add(expr.name.lexeme)
                 extractFromExpr(expr.value, symbols)
             }

@@ -13,17 +13,20 @@ enum class TokenType {
     BEGIN,          // ابدأ
     END,            // انتهى
     CONTEXT,        // السياق
-    RETURN,         // رجع
+    RETURN,         // رد
     WHILE,          // ما دام
     REPEAT,         // كرر
     FOR_EACH,       // لكل
     IN,             // في
-    BREAK,          // اكسر
-    CONTINUE,       // واصل
+    BREAK,          // اكفف
+    CONTINUE,       // امض
+    RAISE,          // بلغ
     AND,            // و
     OR,             // أو
     NOT,            // ليس
-    NULL,           // عدم
+    NULL,           // فارغ
+    VOID,           // عدم
+    STRUCT,         // بنية
     
     // Literals
     IDENTIFIER,
@@ -56,6 +59,7 @@ enum class TokenType {
     RIGHT_PAREN,    // )
     LEFT_BRACKET,   // [
     RIGHT_BRACKET,  // ]
+    QUESTION_MARK,  // ؟
     
     EOF
 }

@@ -139,9 +139,15 @@ class ShellViewModel(val scope: CoroutineScope) {
                     val result = sakhrAnalyzer.analyze(content)
                     tab.diagnostics = result.diagnostics
                     tab.symbols = result.symbols
+                    tab.typeAtLocation = result.typeAtLocation
+                    tab.structFields = result.structFields
+                    tab.completionModel = result.completion
                 } else {
                     tab.diagnostics = emptyList()
                     tab.symbols = emptyList()
+                    tab.typeAtLocation = emptyMap()
+                    tab.structFields = emptyMap()
+                    tab.completionModel = rtlide.lang.intelligence.CompletionModel()
                 }
                 
                 // Delay auto-save to debounce typing

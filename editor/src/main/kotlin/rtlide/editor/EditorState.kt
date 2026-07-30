@@ -13,6 +13,8 @@ import rtlide.lang.SakhrLang
 import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Location
 import rtlide.lang.analysis.QuickFix
+import rtlide.lang.intelligence.CompletionModel
+import rtlide.lang.sakhr.SakhrType
 import rtlide.lang.highlight.Highlighter
 import rtlide.lang.indent.reformat
 import rtlide.lang.schema.LanguageDefinition
@@ -28,6 +30,9 @@ class EditorTab(
 ) {
     var diagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
     var symbols by mutableStateOf<List<String>>(emptyList())
+    var typeAtLocation by mutableStateOf<Map<Location, SakhrType>>(emptyMap())
+    var structFields by mutableStateOf<Map<String, List<String>>>(emptyMap())
+    var completionModel by mutableStateOf(CompletionModel())
     var hoveredDiagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
     var instantTooltip by mutableStateOf(false)
     
