@@ -1,19 +1,25 @@
 package rtlide.shell.toolwindow
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
 enum class Stripe { Start, Bottom, End }
 
-enum class ToolWindowId(val title: String, val stripe: Stripe) {
-    Project("مشروع", Stripe.Start),
-    Structure("البنية", Stripe.Start),
-    Run("تشغيل", Stripe.Bottom),
-    Problems("مشاكل", Stripe.Bottom),
+enum class ToolWindowId(val title: String, val stripe: Stripe, val icon: ImageVector) {
+    Project("مشروع", Stripe.Start, Icons.Default.Folder),
+    Structure("البنية", Stripe.Start, Icons.Default.AccountTree),
+    Run("تشغيل", Stripe.Bottom, Icons.Default.PlayArrow),
+    Problems("مشاكل", Stripe.Bottom, Icons.Default.Warning),
 }
 
 /** Holds tool-window visibility and panel sizes as Compose state. */

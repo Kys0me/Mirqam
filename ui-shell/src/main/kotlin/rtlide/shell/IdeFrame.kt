@@ -127,9 +127,13 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                 ToolWindowStripe(Stripe.Start, layout)
 
                 if (layout.isVisible(ToolWindowId.Project)) {
-                    ProjectToolWindow(vm.currentProject, onFileSelected = { file ->
-                        vm.openFile(file)
-                    }, Modifier.width(layout.startWidth))
+                    ProjectToolWindow(
+                        project = vm.currentProject,
+                        onFileSelected = { file ->
+                            vm.openFile(file)
+                        },
+                        modifier = Modifier.width(layout.startWidth)
+                    )
                     VerticalResizer(onDrag = { layout.resizeStart(it) })
                 }
 

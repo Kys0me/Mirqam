@@ -9,6 +9,7 @@ kotlin { jvmToolchain(17) }
 dependencies {
     implementation(project(":core-platform"))
     implementation(project(":lang-engine"))
+    implementation(project(":ui-components"))
     implementation(compose.runtime)
     implementation(compose.foundation)
     implementation(compose.ui)
