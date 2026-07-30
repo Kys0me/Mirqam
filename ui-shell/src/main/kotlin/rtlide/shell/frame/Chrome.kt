@@ -38,11 +38,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import rtlide.core.theme.IdeColors
+import java.awt.Cursor
 
 @Composable
 fun MainToolbar(
@@ -227,7 +230,11 @@ fun StatusBar(caretLine: Int, caretCol: Int, langName: String, modifier: Modifie
 @Composable
 fun VerticalResizer(onDrag: (Float) -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.fillMaxHeight().width(1.dp).background(IdeColors.BorderColor)
+        modifier
+            .fillMaxHeight()
+            .width(1.dp)
+            .background(IdeColors.BorderColor)
+            .pointerHoverIcon(PointerIcon(Cursor(Cursor.E_RESIZE_CURSOR)))
             .pointerInput(Unit) { detectDragGestures { _, drag -> onDrag(drag.x) } }
     )
 }
@@ -235,7 +242,11 @@ fun VerticalResizer(onDrag: (Float) -> Unit, modifier: Modifier = Modifier) {
 @Composable
 fun HorizontalResizer(onDrag: (Float) -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.fillMaxWidth().height(1.dp).background(IdeColors.BorderColor)
+        modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(IdeColors.BorderColor)
+            .pointerHoverIcon(PointerIcon(Cursor(Cursor.N_RESIZE_CURSOR)))
             .pointerInput(Unit) { detectDragGestures { _, drag -> onDrag(drag.y) } }
     )
 }

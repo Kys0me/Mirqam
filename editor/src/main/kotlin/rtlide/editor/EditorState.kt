@@ -1,5 +1,6 @@
 package rtlide.editor
 
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +36,9 @@ class EditorTab(
     var completionModel by mutableStateOf(CompletionModel())
     var hoveredDiagnostics by mutableStateOf<List<Diagnostic>>(emptyList())
     var instantTooltip by mutableStateOf(false)
+    
+    var lastSavedLines by mutableStateOf(document.lines)
+    val isDirty by derivedStateOf { document.lines != lastSavedLines }
     
     var quickFixInput by mutableStateOf<String?>(null)
     var activePendingFix by mutableStateOf<Pair<QuickFix, Location>?>(null)

@@ -46,7 +46,8 @@ class IdeLayoutState {
     }
 
     fun resizeStart(dx: Float) {
-        startWidth = (startWidth.value + dx).coerceIn(160f, 640f).dp
+        // In RTL, dx < 0 means moving mouse to the left (increasing right panel width)
+        startWidth = (startWidth.value - dx).coerceIn(160f, 640f).dp
     }
 
     fun resizeBottom(dy: Float) {

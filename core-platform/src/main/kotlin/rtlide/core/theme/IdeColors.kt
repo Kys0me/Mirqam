@@ -10,11 +10,14 @@ object IdeColors {
     val CaretColor = Color(0xFFAEAFAD)
     val SelectionBackground = Color(0xFF264F78) // editor text selection
     val TabActiveBackground = Color(0xFF1E1E1E)
-    val TabInactiveBackground = Color(0xFF2D2D30)
-    val BorderColor = Color(0xFF3C3C3C)
-    val TextDefault = Color(0xFFD4D4D4)
-    val TextMuted = Color(0xFF9DA0A8)
-    val LineHighlight = Color(0xFF2B2B2B)
+    val TabInactiveBackground = Color(0xFF2B2D30)
+    val BorderColor = Color(0xFF393B40)
+    val TextDefault = Color(0xFFDFE1E5)
+    val TextMuted = Color(0xFF6F737A)
+    val LineHighlight = Color(0xFF2E3136)
+
+    val AccentBlue = Color(0xFF3574F0)
+    val GutterSeparator = Color(0xFF43454A)
 
     // --- Menu-specific additions ---
     val MenuSelectionBackground = Color(0xFF4B6EAF) // hovered/highlighted row in dropdown menus

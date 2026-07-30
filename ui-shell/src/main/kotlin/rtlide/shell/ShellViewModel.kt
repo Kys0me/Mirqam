@@ -13,6 +13,7 @@ import rtlide.core.project.Project
 import rtlide.core.project.ProjectState
 import rtlide.core.project.ProjectStateStore
 import rtlide.editor.EditorState
+import rtlide.editor.EditorTab
 import rtlide.lang.analysis.SakhrAnalyzer
 import rtlide.terminal.pb.ProcessBackend
 import rtlide.terminal.pb.TerminalBackend
@@ -152,15 +153,16 @@ class ShellViewModel(val scope: CoroutineScope) {
                 
                 // Delay auto-save to debounce typing
                 delay(2000.milliseconds)
-                saveFile(file, content)
+                saveFile(tab, content)
             }
         }
     }
 
-    private fun saveFile(file: File, content: String) {
+    private fun saveFile(tab: EditorTab, content: String) {
         try {
-            file.writeText(content)
-            println("Smart saved: ${file.name}")
+            tab.file.writeText(content)
+            tab.lastSavedLines = tab.document.lines
+            println("Smart saved: ${tab.file.name}")
         } catch (e: Exception) {
             e.printStackTrace()
         }
