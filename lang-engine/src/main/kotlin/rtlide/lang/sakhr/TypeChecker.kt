@@ -44,7 +44,14 @@ class TypeChecker(
         val fields: Map<String, SakhrType>,
         val fieldNames: List<String>,
         val requiredFields: Set<String>,
-        val location: Location
+        val location: Location,
+        var isUsed: Boolean = false,
+        val usedFields: MutableSet<String> = mutableSetOf(),
+        val fieldLocations: Map<String, Location> = emptyMap(),
+        val fieldLengths: Map<String, Int> = emptyMap(),
+        val startLocation: Location? = null,
+        val endLocation: Location? = null,
+        val isEnum: Boolean = false
     )
 
     data class FunctionSignature(
@@ -235,17 +242,17 @@ class TypeChecker(
                 }
                 is Stmt.Function -> {
                     val kind = if (stmt.receiverType != null) FunctionKind.EXTENSION else FunctionKind.FUNCTION
-                    val receiverType = stmt.receiverType?.let { SakhrType.fromLexeme(it.lexeme) }
+                    val receiverType = resolveAndMarkType(stmt.receiverType)
                     
                     val params = stmt.params.map { p ->
                         if (p.type == null) {
                             if (stmt.name.lexeme == "المطلع") SakhrType.LIST else SakhrType.UNKNOWN
                         } else {
-                            SakhrType.fromLexeme(p.type.lexeme)
+                            resolveAndMarkType(p.type)!!
                         }
                     }.toMutableList()
                     
-                    val returnType = stmt.returnType?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.VOID
+                    val returnType = resolveAndMarkType(stmt.returnType) ?: SakhrType.VOID
                     
                     val sig = FunctionSignature(
                         stmt.name.lexeme, params, returnType, kind, receiverType,
@@ -265,27 +272,54 @@ class TypeChecker(
                     val fieldMap = mutableMapOf<String, SakhrType>()
                     val fieldNames = mutableListOf<String>()
                     val requiredFields = mutableSetOf<String>()
+                    val fieldLocations = mutableMapOf<String, Location>()
+                    val fieldLengths = mutableMapOf<String, Int>()
                     for (field in stmt.fields) {
-                        val type = field.type?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.UNKNOWN
-                        fieldMap[field.name.lexeme] = type
-                        fieldNames.add(field.name.lexeme)
+                        val type = resolveAndMarkType(field.type) ?: SakhrType.UNKNOWN
+                        val name = field.name.lexeme
+                        fieldMap[name] = type
+                        fieldNames.add(name)
+                        fieldLocations[name] = field.name.location
+                        
+                        val fieldEnd = when {
+                            field.initializer != null -> exprEnd(field.initializer)
+                            field.type != null -> tokenEnd(field.type)
+                            else -> tokenEnd(field.name)
+                        }
+                        fieldLengths[name] = if (fieldEnd.line == field.name.location.line) fieldEnd.column - field.name.location.column else field.name.lexeme.length
+
                         if (field.initializer == null) {
-                            requiredFields.add(field.name.lexeme)
+                            requiredFields.add(name)
                         }
                     }
-                    val info = StructInfo(stmt.name.lexeme, fieldMap, fieldNames, requiredFields, stmt.name.location)
+                    val info = StructInfo(
+                        stmt.name.lexeme, fieldMap, fieldNames, requiredFields, stmt.name.location,
+                        fieldLocations = fieldLocations, fieldLengths = fieldLengths,
+                        startLocation = stmt.keyword.location,
+                        endLocation = tokenEnd(stmt.endToken)
+                    )
                     scopes.last().structs[stmt.name.lexeme] = info
                     allStructFields[stmt.name.lexeme] = fieldNames
                 }
                 is Stmt.Enum -> {
                     val fieldMap = mutableMapOf<String, SakhrType>()
                     val fieldNames = mutableListOf<String>()
+                    val fieldLocations = mutableMapOf<String, Location>()
+                    val fieldLengths = mutableMapOf<String, Int>()
                     val enumType = SakhrType(stmt.name.lexeme)
                     for (member in stmt.members) {
                         fieldMap[member.lexeme] = enumType
                         fieldNames.add(member.lexeme)
+                        fieldLocations[member.lexeme] = member.location
+                        fieldLengths[member.lexeme] = member.lexeme.length
                     }
-                    val info = StructInfo(stmt.name.lexeme, fieldMap, fieldNames, fieldNames.toSet(), stmt.name.location)
+                    val info = StructInfo(
+                        stmt.name.lexeme, fieldMap, fieldNames, fieldNames.toSet(), stmt.name.location,
+                        fieldLocations = fieldLocations, fieldLengths = fieldLengths,
+                        startLocation = stmt.keyword.location,
+                        endLocation = tokenEnd(stmt.endToken),
+                        isEnum = true
+                    )
                     scopes.last().structs[stmt.name.lexeme] = info
                     allStructFields[stmt.name.lexeme] = fieldNames
                 }
@@ -309,7 +343,7 @@ class TypeChecker(
 
             is Stmt.Function -> {
                 val key = if (stmt.receiverType != null) {
-                    "${SakhrType.fromLexeme(stmt.receiverType.lexeme).lexeme}::${stmt.name.lexeme}"
+                    "${resolveAndMarkType(stmt.receiverType)!!.lexeme}::${stmt.name.lexeme}"
                 } else {
                     stmt.name.lexeme
                 }
@@ -318,10 +352,10 @@ class TypeChecker(
                     if (p.type == null) {
                         if (stmt.name.lexeme == "المطلع") SakhrType.LIST else SakhrType.UNKNOWN
                     } else {
-                        SakhrType.fromLexeme(p.type.lexeme)
+                        resolveAndMarkType(p.type)!!
                     }
                 }
-                val returnType = stmt.returnType?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.VOID
+                val returnType = resolveAndMarkType(stmt.returnType) ?: SakhrType.VOID
                 
                 val sig = scopes.last().functions[key]?.find { it.params == initialParams && it.returnType == returnType } ?: return false
 
@@ -417,7 +451,7 @@ class TypeChecker(
             }
 
             is Stmt.Let -> {
-                val explicitType = stmt.type?.let { SakhrType.fromLexeme(it.lexeme) }
+                val explicitType = resolveAndMarkType(stmt.type)
                 val initType = stmt.initializer?.let { checkExpr(it) } ?: SakhrType.VOID
                 
                 val fixOffset = stmt.keyword.location.column - stmt.names[0].location.column
@@ -445,7 +479,7 @@ class TypeChecker(
             }
 
             is Stmt.Const -> {
-                val explicitType = stmt.type?.let { SakhrType.fromLexeme(it.lexeme) }
+                val explicitType = resolveAndMarkType(stmt.type)
                 val initType = checkExpr(stmt.initializer)
                 
                 val fixOffset = stmt.keyword.location.column - stmt.names[0].location.column
@@ -683,6 +717,7 @@ class TypeChecker(
 
                 val struct = lookupStruct(objType.lexeme)
                 if (struct != null) {
+                    struct.usedFields.add(propertyName)
                     val fieldType = struct.fields[propertyName]
                     if (fieldType != null) return fieldType
                     
@@ -709,6 +744,7 @@ class TypeChecker(
 
                 val struct = lookupStruct(objType.lexeme)
                 if (struct != null) {
+                    struct.usedFields.add(propertyName)
                     val fieldType = struct.fields[propertyName]
                     if (fieldType != null) {
                         if (!isAssignable(fieldType, valueType)) {
@@ -728,7 +764,7 @@ class TypeChecker(
             is Expr.Context -> currentFunction?.receiverType ?: SakhrType.UNKNOWN
             is Expr.Grouping -> checkExpr(expr.expression)
             is Expr.Lambda -> {
-                val paramTypes = expr.params.map { it.type?.let { t -> SakhrType.fromLexeme(t.lexeme) } ?: SakhrType.UNKNOWN }
+                val paramTypes = expr.params.map { resolveAndMarkType(it.type) ?: SakhrType.UNKNOWN }
                 val enclosingFunction = currentFunction
                 // Create a temporary signature for the lambda so Return works
                 val tempSig = FunctionSignature(
@@ -862,12 +898,29 @@ class TypeChecker(
         return names
     }
 
-    private fun lookupStruct(name: String): StructInfo? {
+    private fun lookupStruct(name: String, markUsed: Boolean = true): StructInfo? {
         for (i in scopes.size - 1 downTo 0) {
             val info = scopes[i].structs[name]
-            if (info != null) return info
+            if (info != null) {
+                if (markUsed) info.isUsed = true
+                return info
+            }
         }
         return null
+    }
+
+    private fun markTypeUsed(type: SakhrType) {
+        lookupStruct(type.lexeme)
+        type.elementType?.let { markTypeUsed(it) }
+        type.parameterTypes?.forEach { markTypeUsed(it) }
+        type.returnType?.let { markTypeUsed(it) }
+    }
+
+    private fun resolveAndMarkType(token: Token?): SakhrType? {
+        if (token == null) return null
+        val type = SakhrType.fromLexeme(token.lexeme)
+        markTypeUsed(type)
+        return type
     }
 
     private fun declare(name: Token, type: SakhrType, isConstant: Boolean, isParameter: Boolean = false, fixOffset: Int = 0, fixLength: Int? = null) {
@@ -945,6 +998,39 @@ class TypeChecker(
                         listOf(QuickFix("حذف آمن", "SAFE_DELETE_FUNCTION", startColOffset, endLineOffset, endColOffset))
                     } else emptyList()
                     diagnostics.reportWarning("الدالة '${sig.name}' غير مستخدمة.", sig.location, sig.name.length, fixes)
+                }
+            }
+        }
+
+        // Report unused structs/enums
+        for ((name, struct) in lastScope.structs) {
+            if (!struct.isUsed) {
+                val kind = if (struct.isEnum) "التعداد" else "البنية"
+                val fixes = if (struct.startLocation != null && struct.endLocation != null) {
+                    val startColOffset = struct.startLocation.column - struct.location.column
+                    val endLineOffset = struct.endLocation.line - struct.location.line
+                    val endColOffset = if (endLineOffset == 0) {
+                        struct.endLocation.column - struct.startLocation.column
+                    } else {
+                        struct.endLocation.column
+                    }
+                    listOf(QuickFix("حذف آمن", "SAFE_DELETE_STRUCT", startColOffset, endLineOffset, endColOffset))
+                } else emptyList()
+                diagnostics.reportWarning("$kind '$name' غير مستخدم.", struct.location, name.length, fixes)
+            } else {
+                // Report unused fields
+                for (fieldName in struct.fieldNames) {
+                    val isUsed = fieldName in struct.usedFields
+                    val isRequired = !struct.isEnum && fieldName in struct.requiredFields
+                    if (!isUsed && !isRequired) {
+                        val kind = if (struct.isEnum) "عضو التعداد" else "الحقل"
+                        val loc = struct.fieldLocations[fieldName]
+                        val len = struct.fieldLengths[fieldName] ?: fieldName.length
+                        if (loc != null) {
+                            val fixes = listOf(QuickFix("حذف آمن", "SAFE_DELETE_FIELD", 0, 0, len))
+                            diagnostics.reportWarning("$kind '$fieldName' غير مستخدم.", loc, fieldName.length, fixes)
+                        }
+                    }
                 }
             }
         }

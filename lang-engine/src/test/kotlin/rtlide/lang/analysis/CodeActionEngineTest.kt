@@ -66,4 +66,54 @@ class CodeActionEngineTest {
         doc.applyEdits(actions[0].edits)
         assertEquals("إجراء المطلع(): عدم ابدأ", doc.text())
     }
+
+    @Test
+    fun testSafeDeleteFunction() {
+        val source = "إجراء س() ابدأ انتهى\nأكتب(1)"
+        val location = Location(1, 6) // 'س'
+        // 'إجراء س() ابدأ انتهى'
+        // start (1, 1), name (1, 6), end (1, 21)
+        // startColOffset = 1 - 6 = -5
+        // endLineOffset = 1 - 1 = 0
+        // endColOffset = 21 - 1 = 20
+        val diagnostic = Diagnostic("...", location, Severity.Warning, 1, listOf(
+            QuickFix("حذف آمن", "SAFE_DELETE_FUNCTION", -5, 0, 20)
+        ))
+
+        val actions = engine.getActionsForDiagnostic(diagnostic, source)
+        assertEquals(1, actions.size)
+
+        val doc = Document(source)
+        doc.applyEdits(actions[0].edits)
+        assertEquals("\nأكتب(1)", doc.text())
+    }
+
+    @Test
+    fun testSafeDeleteStruct() {
+        val source = "بنية س ابدأ انتهى\nأكتب(1)"
+        val location = Location(1, 6) // 'س'
+        val diagnostic = Diagnostic("...", location, Severity.Warning, 1, listOf(
+            QuickFix("حذف آمن", "SAFE_DELETE_STRUCT", -5, 0, 17)
+        ))
+
+        val actions = engine.getActionsForDiagnostic(diagnostic, source)
+        val doc = Document(source)
+        doc.applyEdits(actions[0].edits)
+        assertEquals("\nأكتب(1)", doc.text())
+    }
+
+    @Test
+    fun testSafeDeleteField() {
+        val source = "بنية س ابدأ\n    حقل: رقم\nانتهى"
+        val location = Location(2, 5) // 'حقل'
+        val diagnostic = Diagnostic("...", location, Severity.Warning, 3, listOf(
+            QuickFix("حذف آمن", "SAFE_DELETE_FIELD", 0, 0, 8)
+        ))
+
+        val lineText = source.split('\n')[1]
+        val actions = engine.getActionsForDiagnostic(diagnostic, lineText)
+        val doc = Document(source)
+        doc.applyEdits(actions[0].edits)
+        assertEquals("بنية س ابدأ\nانتهى", doc.text())
+    }
 }

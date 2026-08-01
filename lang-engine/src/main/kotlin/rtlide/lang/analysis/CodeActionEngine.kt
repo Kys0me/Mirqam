@@ -89,9 +89,23 @@ class CodeActionEngine {
                     } else null
                 } else null
             }
-            replacement == "SAFE_DELETE_VAR" || replacement == "SAFE_DELETE_FUNCTION" -> {
+            replacement == "SAFE_DELETE_VAR" || replacement == "SAFE_DELETE_FUNCTION" || replacement == "SAFE_DELETE_STRUCT" -> {
                 val (start, end) = getDeleteRange(fix, lineIndex, colIndex, length)
                 QuickFixAction("حذف آمن", listOf(TextEdit(start, end, "")))
+            }
+            replacement == "SAFE_DELETE_FIELD" -> {
+                val (start, end) = getDeleteRange(fix, lineIndex, colIndex, length)
+                var finalStart = start
+                var finalEnd = end
+                
+                val linePrefix = lineText.substring(0, start.col)
+                val lineSuffix = lineText.substring(end.col.coerceAtMost(lineText.length))
+                
+                if (linePrefix.isBlank() && lineSuffix.isBlank()) {
+                    finalStart = Caret(lineIndex, 0)
+                    finalEnd = Caret(lineIndex + 1, 0)
+                }
+                QuickFixAction("حذف آمن", listOf(TextEdit(finalStart, finalEnd, "")))
             }
             replacement == "SAFE_DELETE_PARAM" -> {
                 val startParen = lineText.lastIndexOf('(', colIndex)
