@@ -21,12 +21,18 @@ enum class TokenType {
     BREAK,          // اكفف
     CONTINUE,       // امض
     RAISE,          // بلغ
+    IMPORT,         // استجلب
+    FROM,           // من
+    MOTHER,         // الأم
     AND,            // و
     OR,             // أو
     NOT,            // ليس
     NULL,           // فارغ
     VOID,           // عدم
     STRUCT,         // بنية
+    ENUM,           // تعداد
+    MATCH,          // طابق
+    LAMBDA,         // دالة
     
     // Literals
     IDENTIFIER,
@@ -41,6 +47,7 @@ enum class TokenType {
     COMMA,          // ، (Arabic comma)
     EQUALS,         // =
     EQUALS_EQUALS,  // ==
+    ARROW,          // =>
     BANG_EQUALS,    // !=
     PLUS_EQUALS,    // +=
     MINUS_EQUALS,   // -=

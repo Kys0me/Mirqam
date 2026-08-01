@@ -17,8 +17,10 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun declaration(): Stmt? = try {
         when {
+            match(TokenType.IMPORT) -> importDeclaration()
             match(TokenType.PROCEDURE) -> function("إجراء")
             match(TokenType.STRUCT) -> structDeclaration()
+            match(TokenType.ENUM) -> enumDeclaration()
             match(TokenType.LET) -> letDeclaration()
             match(TokenType.CONST) -> constDeclaration()
             match(TokenType.RETURN) -> returnStatement()
@@ -31,6 +33,27 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
     }
 
     private fun parseType(message: String): Token {
+        if (check(TokenType.LEFT_PAREN)) {
+            val startToken = advance()
+            val paramTypes = mutableListOf<String>()
+            if (!check(TokenType.RIGHT_PAREN)) {
+                do {
+                    paramTypes.add(parseType("يجب تحديد نوع الوسيط.").lexeme)
+                } while (match(TokenType.COMMA))
+            }
+            consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس إغلاق ')' بعد قائمة أنواع الوسائط.")
+            consume(TokenType.ARROW, "يُتوقع وجود السهم '=>' لتعريف نوع الدالة.")
+            val returnType = parseType("يجب تحديد نوع الراجع للدالة.")
+            
+            val lexeme = "(${paramTypes.joinToString("، ")}) => ${returnType.lexeme}"
+            var token = Token(TokenType.IDENTIFIER, lexeme, null, startToken.location)
+            
+            if (match(TokenType.QUESTION_MARK)) {
+                token = Token(token.type, token.lexeme + "؟", token.literal, token.location)
+            }
+            return token
+        }
+
         var type = consumeType(message)
         if (type.lexeme == "قائمة" && match(TokenType.LEFT_PAREN)) {
             val innerType = parseType("يجب تحديد نوع العناصر داخل القائمة.")
@@ -160,6 +183,37 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         return Stmt.Const(keyword, names, type, initializer, previous())
     }
 
+    private fun enumDeclaration(): Stmt {
+        val keyword = previous()
+        val name = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للتعداد.")
+        consume(TokenType.BEGIN, "يُتوقع وجود الكلمة المفتاحية 'ابدأ' لبدء تعريف التعداد.")
+
+        val members = mutableListOf<Token>()
+        while (!check(TokenType.END) && !isAtEnd()) {
+            members.add(consume(TokenType.IDENTIFIER, "يجب تحديد أسماء أعضاء التعداد."))
+        }
+
+        val endToken = consume(TokenType.END, "يُتوقع وجود 'انتهى' لإنهاء تعريف التعداد.")
+        return Stmt.Enum(keyword, name, members, endToken)
+    }
+
+    private fun importDeclaration(): Stmt {
+        val keyword = previous()
+        val path = mutableListOf<Token>()
+        path.add(consume(TokenType.IDENTIFIER, "يُتوقع وجود مسار بعد 'استجلب'."))
+        while (match(TokenType.DOT)) {
+            path.add(consume(TokenType.IDENTIFIER, "يُتوقع وجود اسم بعد '.'."))
+        }
+
+        var isStdLib = false
+        if (match(TokenType.FROM)) {
+            consume(TokenType.MOTHER, "يُتوقع وجود كلمة 'الأم' بعد 'من' للإشارة إلى المكتبة القياسية.")
+            isStdLib = true
+        }
+
+        return Stmt.Import(keyword, path, isStdLib)
+    }
+
     private fun returnStatement(): Stmt {
         val keyword = previous()
         var value: Expr? = null
@@ -177,12 +231,67 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
 
     private fun statement(): Stmt {
         if (match(TokenType.IF)) return ifStatement(previous())
+        if (match(TokenType.MATCH)) return matchStatement(previous())
         if (match(TokenType.WHILE)) return whileStatement(previous())
         if (match(TokenType.FOR_EACH)) return forEachStatement(previous())
         if (match(TokenType.BREAK)) return Stmt.Break(previous())
         if (match(TokenType.CONTINUE)) return Stmt.Continue(previous())
         if (match(TokenType.BEGIN)) return block()
         return expressionStatement()
+    }
+
+    private fun matchStatement(keyword: Token): Stmt {
+        val condition = expression()
+        val cases = mutableListOf<MatchCase>()
+        var defaultBranch: Stmt? = null
+
+        while (!check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
+            val pattern = expression()
+            consume(TokenType.THEN, "يُتوقع وجود الكلمة المفتاحية 'إذن' بعد النمط.")
+            
+            val bodyStatements = mutableListOf<Stmt>()
+            while (!isAtMatchCaseStart() && !check(TokenType.ELSE) && !check(TokenType.END) && !isAtEnd()) {
+                val decl = declaration()
+                if (decl != null) bodyStatements.add(decl)
+            }
+            cases.add(MatchCase(pattern, Stmt.Block(bodyStatements)))
+        }
+
+        if (match(TokenType.ELSE)) {
+            val elseStatements = mutableListOf<Stmt>()
+            while (!check(TokenType.END) && !isAtEnd()) {
+                val decl = declaration()
+                if (decl != null) elseStatements.add(decl)
+            }
+            defaultBranch = Stmt.Block(elseStatements)
+        }
+
+        val endToken = consume(TokenType.END, "يُتوقع وجود 'انتهى' في نهاية جملة 'طابق'.")
+        return Stmt.Match(keyword, condition, cases, defaultBranch, endToken)
+    }
+
+    private fun isAtMatchCaseStart(): Boolean {
+        if (check(TokenType.ELSE) || check(TokenType.END) || isAtEnd()) return false
+        val first = peek().type
+        if (first in listOf(TokenType.NUMBER, TokenType.STRING, TokenType.BOOLEAN, TokenType.NULL, TokenType.VOID)) {
+            return peekNext().type == TokenType.THEN
+        }
+        if (first == TokenType.IDENTIFIER) {
+            if (peekNext().type == TokenType.THEN) return true
+            if (peekNext().type == TokenType.DOT) {
+                if (current + 3 < tokens.size && 
+                    tokens[current + 2].type == TokenType.IDENTIFIER && 
+                    tokens[current + 3].type == TokenType.THEN) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun peekNext(): Token {
+        if (current + 1 >= tokens.size) return tokens.last()
+        return tokens[current + 1]
     }
 
     private fun whileStatement(keyword: Token): Stmt {
@@ -429,6 +538,7 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
     }
 
     private fun primary(): Expr {
+        if (match(TokenType.LAMBDA)) return lambda()
         if (match(TokenType.BOOLEAN, TokenType.NUMBER, TokenType.STRING)) return Expr.Literal(previous().literal, previous().location)
         if (match(TokenType.NULL)) return Expr.Literal(null, previous().location)
         if (match(TokenType.VOID)) return Expr.Literal(SakhrUnit, previous().location)
@@ -441,6 +551,32 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
             return Expr.Grouping(expr)
         }
         throw error(peek(), "يُتوقع وجود تعبير أولي أو قيمة.")
+    }
+
+    private fun lambda(): Expr {
+        val keyword = previous()
+        consume(TokenType.LEFT_PAREN, "يُتوقع وجود قوس '(' بعد الكلمة 'دالة'.")
+        val parameters = mutableListOf<Param>()
+        if (!check(TokenType.RIGHT_PAREN)) {
+            do {
+                val paramName = consume(TokenType.IDENTIFIER, "يجب تحديد اسم للوسيط.")
+                var paramType: Token? = null
+                if (match(TokenType.COLON)) {
+                    paramType = parseType("يجب تحديد نوع للوسيط.")
+                }
+                parameters.add(Param(paramName, paramType))
+            } while (match(TokenType.COMMA))
+        }
+        consume(TokenType.RIGHT_PAREN, "يُتوقع وجود قوس ')' بعد قائمة الوسائط.")
+
+        return if (match(TokenType.ARROW)) {
+            val expr = expression()
+            Expr.Lambda(parameters, LambdaBody.Expression(expr), keyword.location)
+        } else {
+            consume(TokenType.BEGIN, "يُتوقع وجود '=>' أو 'ابدأ' بعد تعريف وسائط الدالة.")
+            val body = block()
+            Expr.Lambda(parameters, LambdaBody.Block(body), keyword.location)
+        }
     }
 
     private fun listLiteral(): Expr {
@@ -499,9 +635,9 @@ class Parser(private val tokens: List<Token>, private val diagnostics: Diagnosti
         while (!isAtEnd()) {
             if (previous().type == TokenType.END) return
             when (peek().type) {
-                TokenType.PROCEDURE, TokenType.STRUCT, TokenType.LET, TokenType.CONST, 
-                TokenType.IF, TokenType.WHILE, TokenType.FOR_EACH, 
-                TokenType.RETURN, TokenType.RAISE -> return
+                TokenType.IMPORT, TokenType.PROCEDURE, TokenType.STRUCT, TokenType.ENUM,
+                TokenType.LET, TokenType.CONST, TokenType.IF, TokenType.MATCH,
+                TokenType.WHILE, TokenType.FOR_EACH, TokenType.RETURN, TokenType.RAISE -> return
                 else -> advance()
             }
         }

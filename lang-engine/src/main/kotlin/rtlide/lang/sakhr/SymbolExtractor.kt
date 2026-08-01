@@ -52,6 +52,21 @@ class SymbolExtractor {
                     field.initializer?.let { i -> extractFromExpr(i, symbols) }
                 }
             }
+            is Stmt.Enum -> {
+                symbols.add(stmt.name.lexeme)
+                stmt.members.forEach { symbols.add(it.lexeme) }
+            }
+            is Stmt.Match -> {
+                extractFromExpr(stmt.expression, symbols)
+                stmt.cases.forEach { case ->
+                    extractFromExpr(case.pattern, symbols)
+                    extractFromStmt(case.body, symbols)
+                }
+                stmt.defaultBranch?.let { extractFromStmt(it, symbols) }
+            }
+            is Stmt.Import -> {
+                stmt.path.forEach { symbols.add(it.lexeme) }
+            }
         }
     }
 
@@ -95,6 +110,16 @@ class SymbolExtractor {
                 extractFromExpr(expr.obj, symbols)
                 symbols.add(expr.name.lexeme)
                 extractFromExpr(expr.value, symbols)
+            }
+            is Expr.Lambda -> {
+                expr.params.forEach { 
+                    symbols.add(it.name.lexeme)
+                    it.defaultValue?.let { d -> extractFromExpr(d, symbols) }
+                }
+                when (val body = expr.body) {
+                    is LambdaBody.Expression -> extractFromExpr(body.expr, symbols)
+                    is LambdaBody.Block -> body.statements.statements.forEach { extractFromStmt(it, symbols) }
+                }
             }
         }
     }

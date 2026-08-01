@@ -16,6 +16,12 @@ sealed class Expr {
     data class Set(val obj: Expr, val name: Token, val value: Expr) : Expr()
     data class Context(val keyword: Token) : Expr()
     data class Assignment(val name: Token, val value: Expr) : Expr()
+    data class Lambda(val params: List<Param>, val body: LambdaBody, val location: Location) : Expr()
+}
+
+sealed class LambdaBody {
+    data class Expression(val expr: Expr) : LambdaBody()
+    data class Block(val statements: Stmt.Block) : LambdaBody()
 }
 
 sealed class Stmt {
@@ -63,9 +69,28 @@ sealed class Stmt {
         val fields: List<Field>,
         val endToken: Token // 'انتهى'
     ) : Stmt()
+    data class Enum(
+        val keyword: Token, // 'تعداد'
+        val name: Token,
+        val members: List<Token>,
+        val endToken: Token // 'انتهى'
+    ) : Stmt()
+    data class Match(
+        val keyword: Token, // 'طابق'
+        val expression: Expr,
+        val cases: List<MatchCase>,
+        val defaultBranch: Stmt?,
+        val endToken: Token // 'انتهى'
+    ) : Stmt()
+    data class Import(
+        val keyword: Token, // 'استجلب'
+        val path: List<Token>,
+        val isStdLib: Boolean
+    ) : Stmt()
 }
 
 data class Param(val name: Token, val type: Token?, val defaultValue: Expr? = null)
 data class Field(val name: Token, val type: Token?, val initializer: Expr?)
+data class MatchCase(val pattern: Expr, val body: Stmt)
 
 object SakhrUnit

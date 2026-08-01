@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.MutableStateFlow
 import rtlide.components.filepicker.ComposeFileDialog
 import rtlide.components.filepicker.FilePickerState
+import rtlide.core.SakhrConfig
 import rtlide.core.project.Project
 import rtlide.core.project.RecentProjectsStore
 import rtlide.core.theme.IdeColors
@@ -108,7 +109,7 @@ fun IdeFrame(keymap: KeymapController, modifier: Modifier = Modifier) {
                     if (tab != null) {
                         val file = tab.file
                         val cmd = if (file.extension.lowercase() in listOf("صخر", "sakhr")) {
-                            arrayOf("sakhr", "شغل", file.absolutePath)
+                            arrayOf(SakhrConfig.COMPILER_NAME, "شغل", file.absolutePath)
                         } else {
                             arrayOf("echo", "لا توجد تهيئة تشغيل لهذه اللغة حالياً.")
                         }

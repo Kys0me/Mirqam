@@ -37,6 +37,12 @@ class Lexer(private val source: String, private val diagnostics: DiagnosticColle
             "فارغ" to TokenType.NULL,
             "عدم" to TokenType.VOID,
             "بنية" to TokenType.STRUCT,
+            "تعداد" to TokenType.ENUM,
+            "طابق" to TokenType.MATCH,
+            "دالة" to TokenType.LAMBDA,
+            "استجلب" to TokenType.IMPORT,
+            "من" to TokenType.FROM,
+            "الأم" to TokenType.MOTHER,
             "صح" to TokenType.BOOLEAN,
             "خطأ" to TokenType.BOOLEAN
         )
@@ -69,6 +75,7 @@ class Lexer(private val source: String, private val diagnostics: DiagnosticColle
             '،' -> addToken(TokenType.COMMA)
             '=' -> {
                 if (match('=')) addToken(TokenType.EQUALS_EQUALS)
+                else if (match('>')) addToken(TokenType.ARROW)
                 else addToken(TokenType.EQUALS)
             }
 
@@ -143,9 +150,9 @@ class Lexer(private val source: String, private val diagnostics: DiagnosticColle
             '!' -> "الرمز '!' لا يُستخدم وحده في لغة صخر. استخدم '!=' للتحقق من عدم المساواة، أو الكلمة 'ليس' لنفي قيمة منطقية."
             ',' -> "الفاصلة اللاتينية ',' غير معتمدة؛ استخدم الفاصلة العربية '،' للفصل بين العناصر."
             '?' -> "علامة الاستفهام اللاتينية '?' غير معتمدة؛ استخدم علامة الاستفهام العربية '؟' للأنواع الاختيارية."
-            ';' -> "الفاصلة المنقوطة ';' لا تُستخدم في لغة صخر."
+            ';' -> "الفاصلة المنقوطة ';' لا تُستخدم في لغة صخر. احذفها؛ فلا حاجة لعلامة إنهاء في نهاية الأوامر."
             '{', '}' -> "القوس '$c' لا يُستخدم لتحديد الكتل؛ استخدم 'ابدأ' و'انتهى' بدلاً منها."
-            '\'' -> "علامة الاقتباس المفردة (') غير معتمدة؛ استخدم المزدوجة \"...\"."
+            '\'' -> "علامة الاقتباس المفردة (') غير معتمدة؛ استخدم المزدوجة \"...\" بدلاً منها."
             in 'a'..'z', in 'A'..'Z' -> "الحرف اللاتيني '$c' لا يصلح لبدء اسم؛ استخدم الأحرف العربية."
             else -> "رمز غير صالح: '$c'"
         }

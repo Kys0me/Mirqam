@@ -14,6 +14,7 @@ import rtlide.core.project.ProjectState
 import rtlide.core.project.ProjectStateStore
 import rtlide.editor.EditorState
 import rtlide.editor.EditorTab
+import rtlide.core.SakhrConfig
 import rtlide.lang.analysis.SakhrAnalyzer
 import rtlide.terminal.pb.ProcessBackend
 import rtlide.terminal.pb.TerminalBackend
@@ -37,7 +38,7 @@ class ShellViewModel(val scope: CoroutineScope) {
 
     val activeRunTab: RunTab? get() = runTabs.getOrNull(activeRunTabIndex)
 
-    private val sakhrAnalyzer = SakhrAnalyzer()
+    private val sakhrAnalyzer = SakhrAnalyzer(SakhrConfig.STDLIB_PATH)
 
     init {
         // Persist UI state when tabs change or active tab changes
@@ -137,7 +138,7 @@ class ShellViewModel(val scope: CoroutineScope) {
             snapshotFlow { tab.document.text() }.collectLatest { content ->
                 // Run analysis if it's a Sakhr file
                 if (file.extension.lowercase() == "صخر") {
-                    val result = sakhrAnalyzer.analyze(content)
+                    val result = sakhrAnalyzer.analyze(content, file)
                     tab.diagnostics = result.diagnostics
                     tab.symbols = result.symbols
                     tab.typeAtLocation = result.typeAtLocation

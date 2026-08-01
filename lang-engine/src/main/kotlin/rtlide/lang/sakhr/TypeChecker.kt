@@ -4,8 +4,12 @@ import rtlide.lang.analysis.DiagnosticCollector
 import rtlide.lang.analysis.Location
 import rtlide.lang.analysis.QuickFix
 
-class TypeChecker(private val diagnostics: DiagnosticCollector) {
+class TypeChecker(
+    private val diagnostics: DiagnosticCollector,
+    private val moduleResolver: SakhrModuleResolver? = null
+) {
     private val scopes = mutableListOf<Scope>()
+    private val checkedModules = mutableMapOf<String, Scope>()
     private var currentFunction: FunctionSignature? = null
     private var loopDepth = 0
     
@@ -105,19 +109,72 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         extensionMethods.getOrPut(receiverType.lexeme) { mutableMapOf() }[name] = params.size
     }
 
+    fun check(module: SakhrModule) {
+        if (checkedModules.containsKey(module.path)) return
+        
+        beginScope()
+        checkInternal(module.statements)
+        checkedModules[module.path] = scopes.removeAt(scopes.size - 1)
+    }
+
     fun check(statements: List<Stmt>) {
+        checkInternal(statements)
+        endScope() // Process global scope
+    }
+
+    private fun checkInternal(statements: List<Stmt>) {
         collectSignatures(statements)
 
         for (stmt in statements) {
             checkStmt(stmt)
         }
+    }
+
+    private fun importSymbols(from: Scope, location: Location) {
+        val to = scopes.last()
         
-        endScope() // Process global scope
+        for ((name, info) in from.variables) {
+            if (to.variables.containsKey(name)) {
+                diagnostics.reportError("تضارب في الأسماء: المتغير '$name' معرف بالفعل.", location)
+            } else {
+                to.variables[name] = info
+            }
+        }
+        
+        for ((name, sigs) in from.functions) {
+            val toSigs = to.functions.getOrPut(name) { mutableListOf() }
+            for (sig in sigs) {
+                if (toSigs.none { it.params == sig.params && it.kind == sig.kind && it.receiverType == sig.receiverType }) {
+                    toSigs.add(sig)
+                }
+            }
+        }
+        
+        for ((name, info) in from.structs) {
+            if (to.structs.containsKey(name)) {
+                diagnostics.reportError("تضارب في الأسماء: البنية '$name' معرفة بالفعل.", location)
+            } else {
+                to.structs[name] = info
+            }
+        }
     }
 
     private fun collectSignatures(statements: List<Stmt>) {
         for (stmt in statements) {
             when (stmt) {
+                is Stmt.Import -> {
+                    if (moduleResolver == null) {
+                        diagnostics.reportError("لا يمكن استخدام 'استجلب' في هذا السياق.", stmt.path.first().location)
+                        continue
+                    }
+                    val module = moduleResolver.resolve(stmt)
+                    if (module != null) {
+                        check(module)
+                        checkedModules[module.path]?.let { importedScope ->
+                            importSymbols(importedScope, stmt.path.first().location)
+                        }
+                    }
+                }
                 is Stmt.Function -> {
                     val kind = if (stmt.receiverType != null) FunctionKind.EXTENSION else FunctionKind.FUNCTION
                     val receiverType = stmt.receiverType?.let { SakhrType.fromLexeme(it.lexeme) }
@@ -159,6 +216,18 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                         }
                     }
                     val info = StructInfo(stmt.name.lexeme, fieldMap, fieldNames, requiredFields, stmt.name.location)
+                    scopes.last().structs[stmt.name.lexeme] = info
+                    allStructFields[stmt.name.lexeme] = fieldNames
+                }
+                is Stmt.Enum -> {
+                    val fieldMap = mutableMapOf<String, SakhrType>()
+                    val fieldNames = mutableListOf<String>()
+                    val enumType = SakhrType(stmt.name.lexeme)
+                    for (member in stmt.members) {
+                        fieldMap[member.lexeme] = enumType
+                        fieldNames.add(member.lexeme)
+                    }
+                    val info = StructInfo(stmt.name.lexeme, fieldMap, fieldNames, fieldNames.toSet(), stmt.name.location)
                     scopes.last().structs[stmt.name.lexeme] = info
                     allStructFields[stmt.name.lexeme] = fieldNames
                 }
@@ -336,6 +405,20 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                 }
             }
             is Stmt.Raise -> { checkExpr(stmt.message) }
+            is Stmt.Import -> { /* Symbols are collected by analysis engine across files */ }
+            is Stmt.Enum -> { /* Signatures collected in collectSignatures */ }
+            is Stmt.Match -> {
+                val conditionType = checkExpr(stmt.expression)
+                stmt.cases.forEach { case ->
+                    val patternType = checkExpr(case.pattern)
+                    if (!isAssignable(conditionType, patternType)) {
+                        val (loc, len) = getExprRange(case.pattern)
+                        diagnostics.reportError("نوع النمط '${patternType}' لا يتوافق مع نوع التعبير '${conditionType}'.", loc, len)
+                    }
+                    checkStmt(case.body)
+                }
+                stmt.defaultBranch?.let { checkStmt(it) }
+            }
             is Stmt.Struct -> {
                 val struct = lookupStruct(stmt.name.lexeme) ?: return
                 for (field in stmt.fields) {
@@ -458,13 +541,24 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
                     val struct = lookupStruct(name)
                     if (struct != null) return validateStructCall(struct, positional, named, expr.callee.name.location, expr.callee.name.lexeme.length)
 
+                    val varInfo = lookupVariable(expr.callee.name)
+                    if (varInfo != null) {
+                        varInfo.isUsed = true
+                        if (varInfo.type.isFunction) {
+                            val sig = varInfo.type
+                            if (positional.size != sig.parameterTypes!!.size) {
+                                diagnostics.reportError("عدد الوسائط الممررة لا يتطابق مع تعريف الدالة.", expr.callee.name.location, expr.callee.name.lexeme.length)
+                            }
+                            // Simplified arg check for now
+                            return sig.returnType ?: SakhrType.UNKNOWN
+                        }
+                    }
+
                     val sig = resolveAndCapture(name, positional, named)
                     if (sig != null) return sig.returnType
 
                     // No matching callable: report at the callee name, like IntelliJ.
-                    val varInfo = lookupVariable(expr.callee.name)
                     if (varInfo != null) {
-                        varInfo.isUsed = true
                         diagnostics.reportError("'${name}' ليس دالة ولا يمكن استدعاؤه.", expr.callee.name.location, expr.callee.name.lexeme.length)
                     } else if (lookupFunctions(name).isNotEmpty()) {
                         diagnostics.reportError("لا توجد نسخة من الدالة '${name}' تقبل هذه الوسائط.", expr.callee.name.location, expr.callee.name.lexeme.length)
@@ -550,6 +644,35 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
 
             is Expr.Context -> currentFunction?.receiverType ?: SakhrType.UNKNOWN
             is Expr.Grouping -> checkExpr(expr.expression)
+            is Expr.Lambda -> {
+                val paramTypes = expr.params.map { it.type?.let { t -> SakhrType.fromLexeme(t.lexeme) } ?: SakhrType.UNKNOWN }
+                val enclosingFunction = currentFunction
+                // Create a temporary signature for the lambda so Return works
+                val tempSig = FunctionSignature(
+                    name = "دالة_مجهولة",
+                    params = paramTypes.toMutableList(),
+                    returnType = SakhrType.UNKNOWN,
+                    kind = FunctionKind.FUNCTION,
+                    location = expr.location
+                )
+                currentFunction = tempSig
+                
+                beginScope()
+                expr.params.forEachIndexed { i, param ->
+                    declare(param.name, paramTypes[i], isConstant = true, isParameter = true)
+                    define(param.name)
+                }
+                val returnType = when (val body = expr.body) {
+                    is LambdaBody.Expression -> checkExpr(body.expr)
+                    is LambdaBody.Block -> {
+                        body.statements.statements.forEach { checkStmt(it) }
+                        SakhrType.UNKNOWN // Inference for multi-statement lambda block is complex
+                    }
+                }
+                endScope()
+                currentFunction = enclosingFunction
+                SakhrType("دالة", null, false, paramTypes, returnType)
+            }
         }
         typeAtLocation[getExprLocation(expr)] = type
         return type
@@ -684,13 +807,30 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
     private fun isAssignable(target: SakhrType, source: SakhrType): Boolean {
         if (target == SakhrType.UNKNOWN || source == SakhrType.UNKNOWN) return true
         if (source == SakhrType.NULL_LITERAL) return target.isOptional
-        if (target.isOptional && !source.isOptional && target.lexeme == source.lexeme) return true
+        
+        // Handle optionality
+        val targetBase = if (target.isOptional) target.copy(isOptional = false) else target
+        val sourceBase = if (source.isOptional) source.copy(isOptional = false) else source
+        
+        if (target.isOptional && !source.isOptional && isAssignable(targetBase, sourceBase)) return true
+        
         if (target.lexeme != source.lexeme) return false
+        
         if (target.lexeme == "قائمة") {
             if (target.elementType == null || source.elementType == null) return true
             return isAssignable(target.elementType, source.elementType)
         }
-        return true
+        
+        if (target.isFunction && source.isFunction) {
+            if (target.parameterTypes!!.size != source.parameterTypes!!.size) return false
+            for (i in target.parameterTypes.indices) {
+                // Parameters are contravariant, but Sakhr simplifies to invariant for now
+                if (!isAssignable(target.parameterTypes[i], source.parameterTypes[i])) return false
+            }
+            return isAssignable(target.returnType!!, source.returnType!!)
+        }
+        
+        return targetBase.lexeme == sourceBase.lexeme
     }
 
     private fun beginScope() { scopes.add(Scope()) }
@@ -731,6 +871,7 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         is Expr.Literal -> expr.location ?: Location(0, 0)
         is Expr.Index -> expr.bracket.location
         is Expr.Set -> expr.name.location
+        is Expr.Lambda -> expr.location
     }
 
     /** Best-effort start location + length of the source range covered by [expr],
@@ -756,6 +897,7 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         is Expr.Set -> exprStart(expr.obj)
         is Expr.Assignment -> expr.name.location
         is Expr.Context -> expr.keyword.location
+        is Expr.Lambda -> expr.location
     }
 
     private fun exprEnd(expr: Expr): Location = when (expr) {
@@ -774,6 +916,29 @@ class TypeChecker(private val diagnostics: DiagnosticCollector) {
         is Expr.Set -> exprEnd(expr.value)
         is Expr.Assignment -> exprEnd(expr.value)
         is Expr.Context -> tokenEnd(expr.keyword)
+        is Expr.Lambda -> when (val body = expr.body) {
+            is LambdaBody.Expression -> exprEnd(body.expr)
+            is LambdaBody.Block -> body.statements.endToken?.location ?: expr.location
+        }
+    }
+
+    private fun lastStmtStart(stmt: Stmt): Location = when (stmt) {
+        is Stmt.Block -> stmt.endToken?.location ?: Location(0, 0)
+        is Stmt.Expression -> exprEnd(stmt.expression)
+        is Stmt.Function -> stmt.endToken.location
+        is Stmt.If -> stmt.elseBranch?.let { lastStmtStart(it) } ?: lastStmtStart(stmt.thenBranch)
+        is Stmt.While -> lastStmtStart(stmt.body)
+        is Stmt.ForEach -> lastStmtStart(stmt.body)
+        is Stmt.Break -> tokenEnd(stmt.keyword)
+        is Stmt.Continue -> tokenEnd(stmt.keyword)
+        is Stmt.Let -> tokenEnd(stmt.endToken ?: stmt.names.last())
+        is Stmt.Const -> tokenEnd(stmt.endToken ?: stmt.names.last())
+        is Stmt.Return -> stmt.value?.let { exprEnd(it) } ?: tokenEnd(stmt.keyword)
+        is Stmt.Raise -> exprEnd(stmt.message)
+        is Stmt.Struct -> stmt.endToken.location
+        is Stmt.Enum -> stmt.endToken.location
+        is Stmt.Match -> stmt.endToken.location
+        is Stmt.Import -> tokenEnd(stmt.path.last())
     }
 
     private fun tokenEnd(token: Token): Location =

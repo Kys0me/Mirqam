@@ -4,15 +4,20 @@ import rtlide.lang.intelligence.CompletionModel
 import rtlide.lang.intelligence.ScopedSymbolExtractor
 import rtlide.lang.sakhr.Lexer
 import rtlide.lang.sakhr.Parser
+import rtlide.lang.sakhr.SakhrModuleResolver
 import rtlide.lang.sakhr.SymbolExtractor
 import rtlide.lang.sakhr.TypeChecker
+import java.io.File
 
-class SakhrAnalyzer {
-    fun analyze(source: String): AnalysisResult {
+class SakhrAnalyzer(private val stdLibPath: String? = null) {
+    fun analyze(source: String, file: File? = null): AnalysisResult {
         val collector = DiagnosticCollector()
         var symbols = emptyList<String>()
         
         try {
+            val projectRoot = file?.let { SakhrModuleResolver.findProjectRoot(it) }
+            val moduleResolver = SakhrModuleResolver(collector, projectRoot, stdLibPath)
+            
             val lexer = Lexer(source, collector)
             val tokens = lexer.scanTokens()
             
@@ -22,7 +27,7 @@ class SakhrAnalyzer {
             val extractor = SymbolExtractor()
             symbols = extractor.extract(statements)
 
-            val typeChecker = TypeChecker(collector)
+            val typeChecker = TypeChecker(collector, moduleResolver)
             typeChecker.check(statements)
 
             val totalLines = source.count { it == '\n' } + 1

@@ -1,11 +1,68 @@
 package rtlide.lang.analysis
 
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SakhrAnalyzerTest {
     private val analyzer = SakhrAnalyzer()
+
+    @Rule
+    @JvmField
+    val tempFolder = TemporaryFolder()
+
+    @Test
+    fun testImport() {
+        val root = tempFolder.newFolder("project")
+        File(root, "صخر").writeText("الاسم = \"تجربة\"")
+        
+        val libFile = File(root, "مكتبة.صخر")
+        libFile.writeText("""
+            إجراء رحب(الاسم) ابدأ
+                أكتب("مرحباً " + الاسم)
+            انتهى
+        """.trimIndent())
+        
+        val mainFile = File(root, "المطلع.صخر")
+        val mainSource = """
+            استجلب مكتبة
+            إجراء المطلع() ابدأ
+                رحب("عالم")
+            انتهى
+        """.trimIndent()
+        
+        val result = analyzer.analyze(mainSource, mainFile)
+        val errors = result.diagnostics.filter { it.severity == Severity.Error }
+        assertTrue(errors.isEmpty(), "Should have no errors when importing locally. Found: ${errors.joinToString { it.message }}")
+    }
+
+    @Test
+    fun testStdLibImport() {
+        val stdLib = tempFolder.newFolder("stdlib")
+        val mathDir = File(stdLib, "الرياضيات")
+        mathDir.mkdirs()
+        File(mathDir, "أساسيات.صخر").writeText("""
+            إجراء جيب(زاوية): رقم ابدأ
+                رد 0
+            انتهى
+        """.trimIndent())
+        
+        val analyzerWithStd = SakhrAnalyzer(stdLib.absolutePath)
+        
+        val source = """
+            استجلب الرياضيات.أساسيات من الأم
+            إجراء المطلع() ابدأ
+                ليكن س = جيب(90)
+            انتهى
+        """.trimIndent()
+        
+        val result = analyzerWithStd.analyze(source)
+        val errors = result.diagnostics.filter { it.severity == Severity.Error }
+        assertTrue(errors.isEmpty(), "Should have no errors when importing from stdlib. Found: ${errors.joinToString { it.message }}")
+    }
 
     @Test
     fun testSyntaxError() {

@@ -1,6 +1,8 @@
 package rtlide.lang.intelligence
 
 import rtlide.lang.analysis.Location
+import rtlide.lang.sakhr.Expr
+import rtlide.lang.sakhr.LambdaBody
 import rtlide.lang.sakhr.SakhrType
 import rtlide.lang.sakhr.Stmt
 
@@ -82,26 +84,22 @@ class ScopedSymbolExtractor {
                     stmt.name.lexeme, SymbolKind.STRUCT, "بنية",
                     stmt.name.location, scope.first, scope.last, stmt.fields.size
                 )
+                is Stmt.Enum -> symbols += ScopedSymbol(
+                    stmt.name.lexeme, SymbolKind.STRUCT, "تعداد",
+                    stmt.name.location, scope.first, scope.last, stmt.members.size
+                )
+                is Stmt.Import -> for (name in stmt.path) {
+                    symbols += ScopedSymbol(
+                        name.lexeme, SymbolKind.VARIABLE, "وحدة",
+                        name.location, name.location.line, scope.last
+                    )
+                }
                 else -> {}
             }
         }
 
         for (stmt in statements) {
             when (stmt) {
-                // Variables become visible on the line after their declaration,
-                // never inside their own initializer.
-                is Stmt.Let -> for (name in stmt.names) {
-                    symbols += ScopedSymbol(
-                        name.lexeme, SymbolKind.VARIABLE, stmt.type?.lexeme ?: "",
-                        name.location, name.location.line + 1, scope.last
-                    )
-                }
-                is Stmt.Const -> for (name in stmt.names) {
-                    symbols += ScopedSymbol(
-                        name.lexeme, SymbolKind.CONSTANT, stmt.type?.lexeme ?: "",
-                        name.location, name.location.line + 1, scope.last
-                    )
-                }
                 is Stmt.Function -> {
                     val body = stmt.keyword.location.line..stmt.endToken.location.line
                     functionRanges += body
@@ -114,6 +112,12 @@ class ScopedSymbolExtractor {
                     walk(stmt.body, body)
                 }
                 is Stmt.Struct -> structRanges += stmt.keyword.location.line..stmt.endToken.location.line
+                is Stmt.Enum -> structRanges += stmt.keyword.location.line..stmt.endToken.location.line
+                is Stmt.Match -> {
+                    val body = stmt.keyword.location.line..stmt.endToken.location.line
+                    stmt.cases.forEach { walk(listOf(it.body), body) }
+                    stmt.defaultBranch?.let { walk(listOf(it), body) }
+                }
                 is Stmt.Block -> walk(stmt.statements, blockRange(stmt, scope))
                 is Stmt.If -> {
                     walkBody(stmt.thenBranch, scope)
@@ -136,8 +140,63 @@ class ScopedSymbolExtractor {
                     )
                     walkBody(stmt.body, body)
                 }
+                is Stmt.Expression -> walkExpr(stmt.expression, scope)
+                is Stmt.Let -> {
+                    for (name in stmt.names) {
+                        symbols += ScopedSymbol(
+                            name.lexeme, SymbolKind.VARIABLE, stmt.type?.lexeme ?: "",
+                            name.location, name.location.line + 1, scope.last
+                        )
+                    }
+                    stmt.initializer?.let { walkExpr(it, scope) }
+                }
+                is Stmt.Const -> {
+                    for (name in stmt.names) {
+                        symbols += ScopedSymbol(
+                            name.lexeme, SymbolKind.CONSTANT, stmt.type?.lexeme ?: "",
+                            name.location, name.location.line + 1, scope.last
+                        )
+                    }
+                    walkExpr(stmt.initializer, scope)
+                }
+                is Stmt.Return -> stmt.value?.let { walkExpr(it, scope) }
+                is Stmt.Raise -> walkExpr(stmt.message, scope)
                 else -> {}
             }
+        }
+    }
+
+    private fun walkExpr(expr: Expr, scope: IntRange) {
+        when (expr) {
+            is Expr.Binary -> { walkExpr(expr.left, scope); walkExpr(expr.right, scope) }
+            is Expr.Logical -> { walkExpr(expr.left, scope); walkExpr(expr.right, scope) }
+            is Expr.Unary -> walkExpr(expr.right, scope)
+            is Expr.Grouping -> walkExpr(expr.expression, scope)
+            is Expr.ListLiteral -> expr.elements.forEach { walkExpr(it, scope) }
+            is Expr.Call -> { walkExpr(expr.callee, scope); expr.arguments.forEach { walkExpr(it, scope) } }
+            is Expr.Get -> walkExpr(expr.obj, scope)
+            is Expr.Index -> { walkExpr(expr.obj, scope); walkExpr(expr.index, scope) }
+            is Expr.Set -> { walkExpr(expr.obj, scope); walkExpr(expr.value, scope) }
+            is Expr.Assignment -> walkExpr(expr.value, scope)
+            is Expr.Lambda -> {
+                val start = expr.location.line
+                val end = when (val body = expr.body) {
+                    is LambdaBody.Expression -> exprEndLine(body.expr, start)
+                    is LambdaBody.Block -> body.statements.endToken?.location?.line ?: start
+                }
+                val lambdaScope = start..end
+                for (p in expr.params) {
+                    symbols += ScopedSymbol(
+                        p.name.lexeme, SymbolKind.PARAMETER, p.type?.lexeme ?: "",
+                        p.name.location, lambdaScope.first, lambdaScope.last
+                    )
+                }
+                when (val body = expr.body) {
+                    is LambdaBody.Expression -> walkExpr(body.expr, lambdaScope)
+                    is LambdaBody.Block -> walk(body.statements.statements, lambdaScope)
+                }
+            }
+            else -> {}
         }
     }
 
@@ -156,6 +215,8 @@ class ScopedSymbolExtractor {
             ?: stmt.statements.lastOrNull()?.let { endLine(it, fallback) } ?: fallback
         is Stmt.Function -> stmt.endToken.location.line
         is Stmt.Struct -> stmt.endToken.location.line
+        is Stmt.Enum -> stmt.endToken.location.line
+        is Stmt.Match -> stmt.endToken.location.line
         is Stmt.If -> maxOf(
             endLine(stmt.thenBranch, fallback),
             stmt.elseBranch?.let { endLine(it, fallback) } ?: 0
@@ -163,6 +224,26 @@ class ScopedSymbolExtractor {
         is Stmt.While -> endLine(stmt.body, fallback)
         is Stmt.ForEach -> endLine(stmt.body, fallback)
         else -> fallback
+    }
+
+    private fun exprEndLine(expr: Expr, fallback: Int): Int = when (expr) {
+        is Expr.Binary -> exprEndLine(expr.right, fallback)
+        is Expr.Logical -> exprEndLine(expr.right, fallback)
+        is Expr.Unary -> exprEndLine(expr.right, fallback)
+        is Expr.Grouping -> exprEndLine(expr.expression, fallback)
+        is Expr.Literal -> expr.location?.line ?: fallback
+        is Expr.ListLiteral -> expr.elements.lastOrNull()?.let { exprEndLine(it, fallback) } ?: expr.bracket.location.line
+        is Expr.Variable -> expr.name.location.line
+        is Expr.Call -> expr.paren.location.line
+        is Expr.Get -> expr.name.location.line
+        is Expr.Index -> exprEndLine(expr.index, fallback)
+        is Expr.Set -> exprEndLine(expr.value, fallback)
+        is Expr.Assignment -> exprEndLine(expr.value, fallback)
+        is Expr.Context -> expr.keyword.location.line
+        is Expr.Lambda -> when (val body = expr.body) {
+            is LambdaBody.Expression -> exprEndLine(body.expr, fallback)
+            is LambdaBody.Block -> body.statements.endToken?.location?.line ?: expr.location.line
+        }
     }
 }
 
@@ -174,10 +255,10 @@ class ScopedSymbolExtractor {
  */
 object CompletionEngine {
 
-    private val TYPE_NAMES = listOf("رقم", "نص", "منطقي", "قائمة", "عدم")
+    private val TYPE_NAMES = listOf("رقم", "نص", "منطقي", "قائمة", "دالة", "عدم")
     private val VALUE_CONSTANTS = listOf("صح", "خطأ", "فارغ")
-    private val NAMING_KEYWORDS = setOf("ليكن", "ألزم", "إجراء", "بنية")
-    private val STATEMENT_KEYWORDS = listOf("ليكن", "ألزم", "إجراء", "بنية", "إن كان", "ما دام", "لكل")
+    private val NAMING_KEYWORDS = setOf("ليكن", "ألزم", "إجراء", "بنية", "تعداد")
+    private val STATEMENT_KEYWORDS = listOf("ليكن", "ألزم", "إجراء", "بنية", "تعداد", "إن كان", "ما دام", "لكل", "طابق", "استجلب")
 
     private val BUILTIN_FUNCTIONS = listOf(
         CompletionItem("أكتب", SymbolKind.FUNCTION, "(قيمة): عدم", 1),
@@ -209,8 +290,12 @@ object CompletionEngine {
 
         var wordStart = col
         while (wordStart > 0 && isIdentChar(lineText[wordStart - 1])) wordStart--
-        val prefix = lineText.substring(wordStart, col)
-        val head = lineText.substring(0, wordStart)
+        var prefix = lineText.substring(wordStart, col)
+        
+        // If prefix starts with a digit, it's a number literal, not a keyword/identifier prefix.
+        if (prefix.isNotEmpty() && prefix[0].isDigit()) prefix = ""
+        
+        val head = lineText.substring(0, if (prefix.isEmpty()) col else wordStart)
         val trimmedHead = head.trimEnd()
         val lastWord = WORD.findAll(trimmedHead).lastOrNull()
             ?.takeIf { it.range.last == trimmedHead.lastIndex }?.value ?: ""
@@ -237,11 +322,10 @@ object CompletionEngine {
         // 4. Multi-word keyword continuations.
         if (lastWord == "إن") return finish(listOf(CompletionItem("كان", SymbolKind.KEYWORD)), prefix, showOnEmpty = true)
         if (lastWord == "ما") return finish(listOf(CompletionItem("دام", SymbolKind.KEYWORD)), prefix, showOnEmpty = true)
+        if (lastWord == "استجلب") return finish(emptyList(), prefix, showOnEmpty = true) // Path completion not yet implemented
+        if (lastWord == "من") return finish(listOf(CompletionItem("الأم", SymbolKind.KEYWORD)), prefix, showOnEmpty = true)
 
-        // 5. Structural follow-ups: إذن بعد الشرط، كرر بعد ما دام، ابدأ بعدهما، في داخل لكل.
-        structuralKeyword(trimmedHead)?.let {
-            return finish(listOf(CompletionItem(it, SymbolKind.KEYWORD)), prefix, showOnEmpty = true)
-        }
+        // 5. Structural follow-ups in 'لكل'.
         if (FOR_IN.containsMatchIn(trimmedHead) && !trimmedHead.endsWith("في")) {
             return finish(listOf(CompletionItem("في", SymbolKind.KEYWORD)), prefix, showOnEmpty = true)
         }
@@ -255,6 +339,14 @@ object CompletionEngine {
         if (atStatementStart && inStructBody) return emptyList()
 
         val items = mutableListOf<CompletionItem>()
+        
+        // Structural follow-ups: إذن بعد الشرط، كرر بعد ما دام، ابدأ بعدهما، في داخل لكل.
+        structuralKeyword(trimmedHead)?.let {
+            if (prefix.isEmpty() || it.startsWith(prefix)) {
+                items += CompletionItem(it, SymbolKind.KEYWORD)
+            }
+        }
+
         if (atStatementStart) {
             items += STATEMENT_KEYWORDS.map { CompletionItem(it, SymbolKind.KEYWORD) }
             if (inFunction) items += CompletionItem("رد", SymbolKind.KEYWORD)
@@ -285,8 +377,10 @@ object CompletionEngine {
     private fun structuralKeyword(trimmedHead: String): String? {
         val t = trimmedHead.trimStart()
         if (t.isEmpty()) return null
+        if (t.startsWith("طابق") && !t.contains("إذن") && !t.contains("انتهى")) return "إذن"
+        
         return when {
-            t.endsWith("إذن") || t.endsWith("كرر") || t.endsWith("وإلا") -> "ابدأ"
+            t.endsWith("إذن") || t.endsWith("كرر") || t.endsWith("وإلا") || t.endsWith("=>") -> "ابدأ"
             !t.endsWith(")") -> null
             t.startsWith("إن كان") && !t.contains("إذن") -> "إذن"
             t.startsWith("ما دام") && !t.contains("كرر") -> "كرر"
@@ -309,12 +403,14 @@ object CompletionEngine {
         if (receiver.isEmpty()) return emptyList()
 
         // Prefer the type the analyzer recorded for this exact occurrence
-        // (columns are 1-based); fall back to the receiver's declared type,
-        // which survives while the current line does not parse yet.
+        // (columns are 1-based); fall back to the receiver's declared type.
+        // For static access (enums/structs), we also look for the struct symbol itself.
         val typeLexeme = model.typeAtLocation[Location(caretLine1, idStart + 1)]?.lexeme
             ?: visibleAt(model, caretLine1)
-                .lastOrNull { it.name == receiver && it.kind != SymbolKind.FUNCTION && it.kind != SymbolKind.STRUCT }
-                ?.detail?.let { baseTypeName(it) }
+                .lastOrNull { it.name == receiver }
+                ?.let { 
+                    if (it.kind == SymbolKind.STRUCT) it.name else baseTypeName(it.detail)
+                }
             ?: return emptyList()
 
         val items = mutableListOf<CompletionItem>()

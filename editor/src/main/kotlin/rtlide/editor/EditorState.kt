@@ -14,10 +14,10 @@ import rtlide.lang.SakhrLang
 import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Location
 import rtlide.lang.analysis.QuickFix
-import rtlide.lang.intelligence.CompletionModel
-import rtlide.lang.sakhr.SakhrType
 import rtlide.lang.highlight.Highlighter
 import rtlide.lang.indent.reformat
+import rtlide.lang.intelligence.CompletionModel
+import rtlide.lang.sakhr.SakhrType
 import rtlide.lang.schema.LanguageDefinition
 import rtlide.lang.tokenizer.Tokenizer
 import java.io.File
@@ -47,9 +47,12 @@ class EditorTab(
     fun applyQuickFix(fix: QuickFix, location: Location, length: Int) {
         val replacement = fix.replacement
         val lineIndex = location.line - 1
-        val colIndex = location.column - 1
+        if (lineIndex !in document.lines.indices) return
         
-        val startCaret = rtlide.core.document.Caret(lineIndex, (colIndex + fix.startColOffset).coerceAtLeast(0))
+        val lineText = document.lineText(lineIndex)
+        val colIndex = (location.column - 1).coerceIn(0, lineText.length)
+        
+        val startCaret = rtlide.core.document.Caret(lineIndex, (colIndex + fix.startColOffset).coerceIn(0, lineText.length))
         val endLine = (lineIndex + fix.endLineOffset).coerceIn(0, document.lines.size - 1)
         val endCol = if (fix.endColOffset != null) {
             val offset: Int = fix.endColOffset!!
@@ -64,8 +67,7 @@ class EditorTab(
         when {
             replacement == "CHANGE_TO_VAR" -> {
                 // Find 'ألزم' before the variable
-                val line = document.lineText(lineIndex)
-                val startOfLine = line.substring(0, colIndex)
+                val startOfLine = lineText.substring(0, colIndex)
                 val constIndex = startOfLine.lastIndexOf("ألزم")
                 if (constIndex != -1) {
                     document.caret = rtlide.core.document.Caret(lineIndex, constIndex + 4)
@@ -80,7 +82,7 @@ class EditorTab(
                     quickFixInput = "" // Initialize to empty string to keep dialog open
                     return
                 }
-                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceIn(0, lineText.length))
                 document.insert(" = $quickFixInput")
                 quickFixInput = null
                 activePendingFix = null
@@ -88,8 +90,7 @@ class EditorTab(
             }
             replacement == "ألزم" -> {
                 // Find 'ليكن' before the variable
-                val line = document.lineText(lineIndex)
-                val startOfLine = line.substring(0, colIndex)
+                val startOfLine = lineText.substring(0, colIndex)
                 val letIndex = startOfLine.lastIndexOf("ليكن")
                 if (letIndex != -1) {
                     document.caret = rtlide.core.document.Caret(lineIndex, letIndex + 4)
@@ -99,12 +100,11 @@ class EditorTab(
             }
             replacement.startsWith("ADD_TYPE:") -> {
                 val typeName = replacement.removePrefix("ADD_TYPE:")
-                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceIn(0, lineText.length))
                 document.insert(": $typeName")
             }
             replacement == "REMOVE_TYPE" -> {
-                val line = document.lineText(lineIndex)
-                val afterId = line.substring(colIndex + length)
+                val afterId = if (colIndex + length < lineText.length) lineText.substring(colIndex + length) else ""
                 val colonIndex = afterId.indexOf(':')
                 if (colonIndex != -1) {
                     val fromColon = afterId.substring(colonIndex)
@@ -113,26 +113,24 @@ class EditorTab(
                         typeEnd++
                     }
                     
-                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length + colonIndex + typeEnd)
-                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                    document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length + colonIndex + typeEnd).coerceAtMost(lineText.length))
+                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceAtMost(lineText.length))
                     document.insert("")
                 }
             }
             replacement.startsWith("ADD_RETURN_TYPE:") -> {
-                val line = document.lineText(lineIndex)
                 val typeName = replacement.removePrefix("ADD_RETURN_TYPE:")
                 // Find ')' after the function name
-                val afterFn = line.substring(colIndex)
+                val afterFn = lineText.substring(colIndex)
                 val closingParen = afterFn.indexOf(')')
                 if (closingParen != -1) {
-                    document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1)
+                    document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1).coerceAtMost(lineText.length))
                     document.insert(": $typeName")
                 }
             }
             replacement == "REMOVE_RETURN_TYPE" -> {
-                val line = document.lineText(lineIndex)
                 // Find ': Type' after ')'
-                val afterFn = line.substring(colIndex)
+                val afterFn = lineText.substring(colIndex)
                 val closingParen = afterFn.indexOf(')')
                 if (closingParen != -1) {
                     val afterParen = afterFn.substring(closingParen + 1)
@@ -143,8 +141,8 @@ class EditorTab(
                          while (typeEnd < fromColon.length && (fromColon[typeEnd].isLetter() || fromColon[typeEnd].isWhitespace())) {
                              typeEnd++
                          }
-                         document.caret = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1 + colonIndex + typeEnd)
-                         document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex + closingParen + 1)
+                         document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1 + colonIndex + typeEnd).coerceAtMost(lineText.length))
+                         document.selectionAnchor = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1).coerceAtMost(lineText.length))
                          document.insert("")
                     }
                 }
@@ -158,15 +156,14 @@ class EditorTab(
                     val l = document.lineText(i)
                     if (l.contains("ابدأ")) {
                         insertLine = i + 1
-                        // Heuristic for indentation: look at the line with "ابدأ" or the line after it
+                        // Heuristic for indentation
                         val match = Regex("^\\s*").find(l)
                         indent = (match?.value ?: "") + "    "
                         break
                     }
                 }
                 
-                val newCaret = rtlide.core.document.Caret(insertLine, 0)
-                document.caret = newCaret
+                document.caret = rtlide.core.document.Caret(insertLine, 0)
                 document.insert("${indent}ليكن $varName\n")
             }
             replacement == "SAFE_DELETE_VAR" || replacement == "SAFE_DELETE_FUNCTION" -> {
@@ -186,50 +183,40 @@ class EditorTab(
                 document.insert("")
             }
             replacement == "SAFE_DELETE_PARAM" -> {
-                val line = document.lineText(lineIndex)
-                val startParen = line.lastIndexOf('(', colIndex)
-                val endParen = line.indexOf(')', colIndex)
+                val startParen = lineText.lastIndexOf('(', colIndex)
+                val endParen = lineText.indexOf(')', colIndex)
                 if (startParen != -1 && endParen != -1 && endParen > startParen) {
-                    // Start unit exactly at start offset provided or colIndex
-                    val unitStart = colIndex + fix.startColOffset
-                    // End unit exactly at end offset provided (relative to unitStart if endLineOffset is 0) or colIndex + length
-                    val unitEnd = if (fix.endColOffset != null) {
-                        if (fix.endLineOffset == 0) unitStart + fix.endColOffset!! else fix.endColOffset!!
-                    } else {
-                        // Fallback: name + possible type
-                        var e = colIndex + length
-                        val afterId = line.substring(e)
-                        val match = Regex("^\\s*:\\s*[\\w\\s]+").find(afterId)
-                        if (match != null) e += match.value.length
-                        e
+                    val unitStart = startCaret.col
+                    val unitEnd = endCaret.col
+                    
+                    if (unitStart > startParen && unitEnd <= endParen && unitEnd >= unitStart) {
+                        var deleteStart = unitStart
+                        var deleteEnd = unitEnd
+                        
+                        val beforeUnit = lineText.substring(startParen + 1, unitStart)
+                        val afterUnit = lineText.substring(unitEnd, endParen)
+                        
+                        if (afterUnit.contains('،')) {
+                            val commaPos = afterUnit.indexOf('،')
+                            deleteEnd = unitEnd + commaPos + 1
+                            while (deleteEnd < endParen && lineText[deleteEnd].isWhitespace()) deleteEnd++
+                        } else if (beforeUnit.contains('،')) {
+                            val commaPos = beforeUnit.lastIndexOf('،')
+                            deleteStart = startParen + 1 + commaPos
+                        } else {
+                            deleteStart = (startParen + 1 + beforeUnit.takeWhile { it.isWhitespace() }.length).coerceAtMost(unitStart)
+                            deleteEnd = (unitEnd + afterUnit.takeLastWhile { it.isWhitespace() }.length).coerceAtLeast(unitEnd)
+                        }
+                        
+                        document.caret = rtlide.core.document.Caret(lineIndex, deleteEnd)
+                        document.selectionAnchor = rtlide.core.document.Caret(lineIndex, deleteStart)
+                        document.insert("")
                     }
-                    
-                    var deleteStart = unitStart
-                    var deleteEnd = unitEnd
-                    
-                    val beforeUnit = line.substring(startParen + 1, unitStart)
-                    val afterUnit = line.substring(unitEnd, endParen)
-                    
-                    if (afterUnit.contains('،')) {
-                        val commaPos = afterUnit.indexOf('،')
-                        deleteEnd = unitEnd + commaPos + 1
-                        while (deleteEnd < endParen && line[deleteEnd].isWhitespace()) deleteEnd++
-                    } else if (beforeUnit.contains('،')) {
-                        val commaPos = beforeUnit.lastIndexOf('،')
-                        deleteStart = startParen + 1 + commaPos
-                    } else {
-                        deleteStart = (startParen + 1 + beforeUnit.takeWhile { it.isWhitespace() }.length).coerceAtMost(unitStart)
-                        deleteEnd = (unitEnd + afterUnit.takeLastWhile { it.isWhitespace() }.length).coerceAtLeast(unitEnd)
-                    }
-                    
-                    document.caret = rtlide.core.document.Caret(lineIndex, deleteEnd)
-                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, deleteStart)
-                    document.insert("")
                 }
             }
             else -> {
                 // Suggestion replacement
-                document.caret = rtlide.core.document.Caret(lineIndex, colIndex + length)
+                document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceAtMost(lineText.length))
                 document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex)
                 document.insert(replacement)
             }
