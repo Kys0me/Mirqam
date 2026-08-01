@@ -14,6 +14,15 @@ import java.awt.datatransfer.StringSelection
 data class Caret(val line: Int, val col: Int)
 
 /**
+ * Represents a transformation to the document.
+ */
+data class TextEdit(
+    val start: Caret,
+    val end: Caret,
+    val newText: String
+)
+
+/**
  * Minimal line-based document backed by Compose snapshot state, so any mutation
  * recomposes the editor. This is deliberately simple; the public surface
  * (lines / caret / insert / backspace / moveCaret) is what the rest of the
@@ -321,13 +330,52 @@ class Document(initial: String = "") {
         caret = Caret(lineIndex, line.length)
     }
 
-    /** Replace the entire document content. */
     fun setText(newText: String) {
         lines = splitLines(newText)
         caret = Caret(0, 0)
         selectionAnchor = null
         undoStack.clear()
         redoStack.clear()
+    }
+
+    /** Applies a sequence of edits. Assumes they are non-overlapping or sorted. */
+    fun applyEdits(edits: List<TextEdit>) {
+        if (edits.isEmpty()) return
+        pushUndo()
+        // Sort edits backwards to maintain offset validity
+        val sorted = edits.sortedByDescending { it.start.line * 10000 + it.start.col }
+        
+        for (edit in sorted) {
+            selectionAnchor = edit.start
+            caret = edit.end
+            deleteSelectionInternal()
+            // We need a non-pushing insert
+            insertAtCaretInternal(edit.newText)
+        }
+        selectionAnchor = null
+    }
+
+    private fun insertAtCaretInternal(textToInsert: String) {
+        if (textToInsert.isEmpty()) return
+
+        val (l, c) = caret
+        val current = lineText(l)
+        val safeCol = c.coerceIn(0, current.length)
+        val next = lines.toMutableList()
+        if ('\n' in textToInsert) {
+            val merged = current.substring(0, safeCol) + textToInsert + current.substring(safeCol)
+            val pieces = splitLines(merged)
+            next.removeAt(l)
+            next.addAll(l, pieces)
+            lines = next
+            val lastPiece = pieces.last()
+            val tailLen = current.length - safeCol
+            caret = Caret(l + pieces.size - 1, (lastPiece.length - tailLen).coerceAtLeast(0))
+        } else {
+            next[l] = current.substring(0, safeCol) + textToInsert + current.substring(safeCol)
+            lines = next
+            caret = Caret(l, safeCol + textToInsert.length)
+        }
     }
 
     /** Replace the entire document content, preserving undo history. */

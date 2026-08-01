@@ -11,6 +11,7 @@ dependencies {
     implementation(compose.runtime)
     // Highlighter emits Compose AnnotatedString/Color/SpanStyle.
     implementation(compose.ui)
+    implementation(project(":core-platform"))
     implementation(libs.kotlinx.serialization.json)
     
     testImplementation(kotlin("test"))

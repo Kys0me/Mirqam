@@ -122,12 +122,70 @@ class TypeChecker(
         endScope() // Process global scope
     }
 
-    private fun checkInternal(statements: List<Stmt>) {
+    private fun checkInternal(statements: List<Stmt>): Boolean {
         collectSignatures(statements)
 
+        var terminated = false
         for (stmt in statements) {
+            if (terminated) {
+                val loc = getStmtStartLocation(stmt)
+                diagnostics.reportWarning("كود غير قابل للوصول.", loc, 1) // Just mark the start
+                break
+            }
             checkStmt(stmt)
+            if (stmtTerminates(stmt)) {
+                terminated = true
+            }
         }
+        return terminated
+    }
+
+    private fun stmtTerminates(stmt: Stmt): Boolean = when (stmt) {
+        is Stmt.Return -> true
+        is Stmt.Raise -> true
+        is Stmt.Break -> true
+        is Stmt.Continue -> true
+        is Stmt.Block -> checkInternal(stmt.statements)
+        is Stmt.If -> {
+            val thenTerminates = if (stmt.thenBranch is Stmt.Block) {
+                checkInternal(stmt.thenBranch.statements)
+            } else {
+                stmtTerminates(stmt.thenBranch)
+            }
+            val elseTerminates = stmt.elseBranch?.let {
+                if (it is Stmt.Block) checkInternal(it.statements) else stmtTerminates(it)
+            } ?: false
+            thenTerminates && elseTerminates
+        }
+        is Stmt.Match -> {
+            val allCasesTerminate = stmt.cases.all { 
+                if (it.body is Stmt.Block) checkInternal(it.body.statements) else stmtTerminates(it.body)
+            }
+            val defaultTerminates = stmt.defaultBranch?.let {
+                if (it is Stmt.Block) checkInternal(it.statements) else stmtTerminates(it)
+            } ?: false
+            allCasesTerminate && defaultTerminates
+        }
+        else -> false
+    }
+
+    private fun getStmtStartLocation(stmt: Stmt): Location = when (stmt) {
+        is Stmt.Block -> stmt.statements.firstOrNull()?.let { getStmtStartLocation(it) } ?: Location(0, 0)
+        is Stmt.Expression -> getExprLocation(stmt.expression)
+        is Stmt.Function -> stmt.keyword.location
+        is Stmt.If -> stmt.keyword.location
+        is Stmt.While -> stmt.keyword.location
+        is Stmt.ForEach -> stmt.keyword.location
+        is Stmt.Break -> stmt.keyword.location
+        is Stmt.Continue -> stmt.keyword.location
+        is Stmt.Let -> stmt.keyword.location
+        is Stmt.Const -> stmt.keyword.location
+        is Stmt.Return -> stmt.keyword.location
+        is Stmt.Raise -> stmt.keyword.location
+        is Stmt.Struct -> stmt.keyword.location
+        is Stmt.Enum -> stmt.keyword.location
+        is Stmt.Match -> stmt.keyword.location
+        is Stmt.Import -> stmt.keyword.location
     }
 
     private fun importSymbols(from: Scope, location: Location) {
@@ -236,12 +294,12 @@ class TypeChecker(
         }
     }
 
-    private fun checkStmt(stmt: Stmt) {
+    private fun checkStmt(stmt: Stmt): Boolean {
+        var terminated = false
         when (stmt) {
             is Stmt.Block -> {
                 beginScope()
-                collectSignatures(stmt.statements)
-                stmt.statements.forEach { checkStmt(it) }
+                terminated = checkInternal(stmt.statements)
                 endScope()
             }
 
@@ -265,7 +323,7 @@ class TypeChecker(
                 }
                 val returnType = stmt.returnType?.let { SakhrType.fromLexeme(it.lexeme) } ?: SakhrType.VOID
                 
-                val sig = scopes.last().functions[key]?.find { it.params == initialParams && it.returnType == returnType } ?: return 
+                val sig = scopes.last().functions[key]?.find { it.params == initialParams && it.returnType == returnType } ?: return false
 
                 val enclosingFunction = currentFunction
                 currentFunction = sig
@@ -278,7 +336,15 @@ class TypeChecker(
                 for (i in stmt.params.indices) {
                     val param = stmt.params[i]
                     val paramType = sig.params[i]
-                    declare(param.name, paramType, isConstant = true, isParameter = true)
+                    
+                    val paramEnd = when {
+                        param.defaultValue != null -> exprEnd(param.defaultValue)
+                        param.type != null -> tokenEnd(param.type)
+                        else -> tokenEnd(param.name)
+                    }
+                    val paramLen = if (paramEnd.line == param.name.location.line) paramEnd.column - param.name.location.column else param.name.lexeme.length
+
+                    declare(param.name, paramType, isConstant = true, isParameter = true, fixOffset = 0, fixLength = paramLen)
                     define(param.name)
                     
                     if (param.type == null && paramType != SakhrType.UNKNOWN) {
@@ -290,9 +356,9 @@ class TypeChecker(
                      diagnostics.reportInformation("الدالة '${stmt.name.lexeme}' لديها نوع إرجاع ضمني '${sig.returnType.lexeme}'.", stmt.name.location, stmt.name.lexeme.length, listOf(QuickFix("استخدام نوع صريح: ${sig.returnType.lexeme}", "ADD_RETURN_TYPE:${sig.returnType.lexeme}")))
                 }
 
-                stmt.body.forEach { checkStmt(it) }
+                val bodyTerminates = checkInternal(stmt.body)
 
-                if (sig.returnType != SakhrType.VOID && !returnsOnAllPaths(stmt.body)) {
+                if (sig.returnType != SakhrType.VOID && !bodyTerminates) {
                     diagnostics.reportError("الدالة '${sig.name}' يجب أن تعيد قيمة من نوع '${sig.returnType.lexeme}'.", stmt.name.location, stmt.name.lexeme.length)
                 }
 
@@ -306,8 +372,9 @@ class TypeChecker(
                     val (loc, len) = getExprRange(stmt.condition)
                     diagnostics.reportError("شرط 'إن كان' يجب أن يكون من نوع 'منطقي'.", loc, len)
                 }
-                checkStmt(stmt.thenBranch)
-                stmt.elseBranch?.let { checkStmt(it) }
+                val thenT = checkStmt(stmt.thenBranch)
+                val elseT = stmt.elseBranch?.let { checkStmt(it) } ?: false
+                terminated = thenT && elseT
             }
 
             is Stmt.While -> {
@@ -340,8 +407,14 @@ class TypeChecker(
                 endScope()
             }
 
-            is Stmt.Break -> if (loopDepth == 0) diagnostics.reportError("لا يمكن استخدام 'اكفف' خارج حلقة.", stmt.keyword.location, stmt.keyword.lexeme.length)
-            is Stmt.Continue -> if (loopDepth == 0) diagnostics.reportError("لا يمكن استخدام 'امض' خارج حلقة.", stmt.keyword.location, stmt.keyword.lexeme.length)
+            is Stmt.Break -> {
+                if (loopDepth == 0) diagnostics.reportError("لا يمكن استخدام 'اكفف' خارج حلقة.", stmt.keyword.location, stmt.keyword.lexeme.length)
+                terminated = true
+            }
+            is Stmt.Continue -> {
+                if (loopDepth == 0) diagnostics.reportError("لا يمكن استخدام 'امض' خارج حلقة.", stmt.keyword.location, stmt.keyword.lexeme.length)
+                terminated = true
+            }
 
             is Stmt.Let -> {
                 val explicitType = stmt.type?.let { SakhrType.fromLexeme(it.lexeme) }
@@ -400,27 +473,32 @@ class TypeChecker(
                 if (currentFunction == null) diagnostics.reportError("لا يمكن استخدام 'رد' خارج الدالة.", stmt.keyword.location, stmt.keyword.lexeme.length)
                 val valueType = stmt.value?.let { checkExpr(it) } ?: SakhrType.VOID
                 if (currentFunction != null && !isAssignable(currentFunction!!.returnType, valueType)) {
-                    val (loc, len) = if (stmt.value != null) getExprRange(stmt.value) else stmt.keyword.location to stmt.keyword.lexeme.length
-                    diagnostics.reportError("نوع الراجع لا يتطابق مع نوع إرجاع الدالة.", loc, len)
+                    diagnostics.reportError("نوع الإرجاع غير متوافق. المتوقع: '${currentFunction!!.returnType}', الموجود: '$valueType'.", stmt.keyword.location, stmt.keyword.lexeme.length)
                 }
+                terminated = true
             }
-            is Stmt.Raise -> { checkExpr(stmt.message) }
-            is Stmt.Import -> { /* Symbols are collected by analysis engine across files */ }
-            is Stmt.Enum -> { /* Signatures collected in collectSignatures */ }
+
+            is Stmt.Raise -> {
+                checkExpr(stmt.message)
+                terminated = true
+            }
+            
             is Stmt.Match -> {
-                val conditionType = checkExpr(stmt.expression)
-                stmt.cases.forEach { case ->
-                    val patternType = checkExpr(case.pattern)
-                    if (!isAssignable(conditionType, patternType)) {
-                        val (loc, len) = getExprRange(case.pattern)
-                        diagnostics.reportError("نوع النمط '${patternType}' لا يتوافق مع نوع التعبير '${conditionType}'.", loc, len)
-                    }
-                    checkStmt(case.body)
+                checkExpr(stmt.expression)
+                var allCasesTerminate = true
+                for (case in stmt.cases) {
+                    if (!checkStmt(case.body)) allCasesTerminate = false
                 }
-                stmt.defaultBranch?.let { checkStmt(it) }
+                val defaultTerminates = stmt.defaultBranch?.let { checkStmt(it) } ?: false
+                terminated = allCasesTerminate && defaultTerminates
             }
+            
+            is Stmt.Import -> {
+                 // Already handled in collectSignatures
+            }
+            
             is Stmt.Struct -> {
-                val struct = lookupStruct(stmt.name.lexeme) ?: return
+                val struct = lookupStruct(stmt.name.lexeme) ?: return false
                 for (field in stmt.fields) {
                     if (field.initializer != null) {
                         val initType = checkExpr(field.initializer)
@@ -432,7 +510,12 @@ class TypeChecker(
                     }
                 }
             }
+            
+            is Stmt.Enum -> {
+                // Members checked in collectSignatures
+            }
         }
+        return terminated
     }
 
     private fun checkExpr(expr: Expr): SakhrType {
@@ -851,7 +934,17 @@ class TypeChecker(
         for (sigs in lastScope.functions.values) {
             for (sig in sigs) {
                 if (!sig.isBuiltIn && !sig.isUsed && sig.name != "المطلع") {
-                    diagnostics.reportWarning("الدالة '${sig.name}' غير مستخدمة.", sig.location, sig.name.length)
+                    val fixes = if (sig.startLocation != null && sig.endLocation != null) {
+                        val startColOffset = sig.startLocation.column - sig.location.column
+                        val endLineOffset = sig.endLocation.line - sig.location.line
+                        val endColOffset = if (endLineOffset == 0) {
+                            sig.endLocation.column - sig.startLocation.column
+                        } else {
+                            sig.endLocation.column
+                        }
+                        listOf(QuickFix("حذف آمن", "SAFE_DELETE_FUNCTION", startColOffset, endLineOffset, endColOffset))
+                    } else emptyList()
+                    diagnostics.reportWarning("الدالة '${sig.name}' غير مستخدمة.", sig.location, sig.name.length, fixes)
                 }
             }
         }

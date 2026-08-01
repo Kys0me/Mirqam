@@ -21,6 +21,7 @@ data class ScopedSymbol(
     val scopeStartLine: Int,
     val scopeEndLine: Int,
     val paramCount: Int = -1,
+    val isTopLevel: Boolean = false
 )
 
 /** One row in the completion popup. */
@@ -64,11 +65,11 @@ class ScopedSymbolExtractor {
     private val structRanges = mutableListOf<IntRange>()
 
     fun extract(statements: List<Stmt>, totalLines: Int): Result {
-        walk(statements, 1..totalLines.coerceAtLeast(1))
+        walk(statements, 1..totalLines.coerceAtLeast(1), isTopLevel = true)
         return Result(symbols, functionRanges, loopRanges, structRanges)
     }
 
-    private fun walk(statements: List<Stmt>, scope: IntRange) {
+    private fun walk(statements: List<Stmt>, scope: IntRange, isTopLevel: Boolean = false) {
         // Functions and structs are hoisted: visible across the whole scope.
         for (stmt in statements) {
             when (stmt) {
@@ -77,21 +78,25 @@ class ScopedSymbolExtractor {
                     val ret = stmt.returnType?.let { ": ${it.lexeme}" } ?: ""
                     symbols += ScopedSymbol(
                         stmt.name.lexeme, SymbolKind.FUNCTION, "($params)$ret",
-                        stmt.name.location, scope.first, scope.last, stmt.params.size
+                        stmt.name.location, scope.first, scope.last, stmt.params.size,
+                        isTopLevel = isTopLevel
                     )
                 }
                 is Stmt.Struct -> symbols += ScopedSymbol(
                     stmt.name.lexeme, SymbolKind.STRUCT, "بنية",
-                    stmt.name.location, scope.first, scope.last, stmt.fields.size
+                    stmt.name.location, scope.first, scope.last, stmt.fields.size,
+                    isTopLevel = isTopLevel
                 )
                 is Stmt.Enum -> symbols += ScopedSymbol(
                     stmt.name.lexeme, SymbolKind.STRUCT, "تعداد",
-                    stmt.name.location, scope.first, scope.last, stmt.members.size
+                    stmt.name.location, scope.first, scope.last, stmt.members.size,
+                    isTopLevel = isTopLevel
                 )
                 is Stmt.Import -> for (name in stmt.path) {
                     symbols += ScopedSymbol(
                         name.lexeme, SymbolKind.VARIABLE, "وحدة",
-                        name.location, name.location.line, scope.last
+                        name.location, name.location.line, scope.last,
+                        isTopLevel = isTopLevel
                     )
                 }
                 else -> {}
@@ -106,19 +111,20 @@ class ScopedSymbolExtractor {
                     for (p in stmt.params) {
                         symbols += ScopedSymbol(
                             p.name.lexeme, SymbolKind.PARAMETER, p.type?.lexeme ?: "",
-                            p.name.location, body.first, body.last
+                            p.name.location, body.first, body.last,
+                            isTopLevel = false
                         )
                     }
-                    walk(stmt.body, body)
+                    walk(stmt.body, body, isTopLevel = false)
                 }
                 is Stmt.Struct -> structRanges += stmt.keyword.location.line..stmt.endToken.location.line
                 is Stmt.Enum -> structRanges += stmt.keyword.location.line..stmt.endToken.location.line
                 is Stmt.Match -> {
                     val body = stmt.keyword.location.line..stmt.endToken.location.line
-                    stmt.cases.forEach { walk(listOf(it.body), body) }
-                    stmt.defaultBranch?.let { walk(listOf(it), body) }
+                    stmt.cases.forEach { walk(listOf(it.body), body, isTopLevel = false) }
+                    stmt.defaultBranch?.let { walk(listOf(it), body, isTopLevel = false) }
                 }
-                is Stmt.Block -> walk(stmt.statements, blockRange(stmt, scope))
+                is Stmt.Block -> walk(stmt.statements, blockRange(stmt, scope), isTopLevel = false)
                 is Stmt.If -> {
                     walkBody(stmt.thenBranch, scope)
                     stmt.elseBranch?.let { walkBody(it, scope) }
@@ -132,11 +138,12 @@ class ScopedSymbolExtractor {
                     val body = stmt.keyword.location.line..endLine(stmt.body, scope.last)
                     loopRanges += body
                     stmt.indexVar?.let {
-                        symbols += ScopedSymbol(it.lexeme, SymbolKind.VARIABLE, "رقم", it.location, body.first, body.last)
+                        symbols += ScopedSymbol(it.lexeme, SymbolKind.VARIABLE, "رقم", it.location, body.first, body.last, isTopLevel = false)
                     }
                     symbols += ScopedSymbol(
                         stmt.elementVar.lexeme, SymbolKind.VARIABLE, "",
-                        stmt.elementVar.location, body.first, body.last
+                        stmt.elementVar.location, body.first, body.last,
+                        isTopLevel = false
                     )
                     walkBody(stmt.body, body)
                 }
@@ -145,7 +152,8 @@ class ScopedSymbolExtractor {
                     for (name in stmt.names) {
                         symbols += ScopedSymbol(
                             name.lexeme, SymbolKind.VARIABLE, stmt.type?.lexeme ?: "",
-                            name.location, name.location.line + 1, scope.last
+                            name.location, name.location.line + 1, scope.last,
+                            isTopLevel = isTopLevel
                         )
                     }
                     stmt.initializer?.let { walkExpr(it, scope) }
@@ -154,7 +162,8 @@ class ScopedSymbolExtractor {
                     for (name in stmt.names) {
                         symbols += ScopedSymbol(
                             name.lexeme, SymbolKind.CONSTANT, stmt.type?.lexeme ?: "",
-                            name.location, name.location.line + 1, scope.last
+                            name.location, name.location.line + 1, scope.last,
+                            isTopLevel = isTopLevel
                         )
                     }
                     walkExpr(stmt.initializer, scope)
@@ -188,12 +197,13 @@ class ScopedSymbolExtractor {
                 for (p in expr.params) {
                     symbols += ScopedSymbol(
                         p.name.lexeme, SymbolKind.PARAMETER, p.type?.lexeme ?: "",
-                        p.name.location, lambdaScope.first, lambdaScope.last
+                        p.name.location, lambdaScope.first, lambdaScope.last,
+                        isTopLevel = false
                     )
                 }
                 when (val body = expr.body) {
                     is LambdaBody.Expression -> walkExpr(body.expr, lambdaScope)
-                    is LambdaBody.Block -> walk(body.statements.statements, lambdaScope)
+                    is LambdaBody.Block -> walk(body.statements.statements, lambdaScope, isTopLevel = false)
                 }
             }
             else -> {}
@@ -202,8 +212,8 @@ class ScopedSymbolExtractor {
 
     private fun walkBody(body: Stmt, enclosing: IntRange) {
         when (body) {
-            is Stmt.Block -> walk(body.statements, blockRange(body, enclosing))
-            else -> walk(listOf(body), enclosing)
+            is Stmt.Block -> walk(body.statements, blockRange(body, enclosing), isTopLevel = false)
+            else -> walk(listOf(body), enclosing, isTopLevel = false)
         }
     }
 
@@ -334,6 +344,7 @@ object CompletionEngine {
         val inLoop = model.loopRanges.any { caretLine1 in it }
         val inStructBody = model.structRanges.any { caretLine1 in it } && !inFunction
         val atStatementStart = trimmedHead.isEmpty()
+        val isTopLevel = !inFunction && !inStructBody
 
         // Inside a struct body a statement start means naming a new field.
         if (atStatementStart && inStructBody) return emptyList()
@@ -348,7 +359,15 @@ object CompletionEngine {
         }
 
         if (atStatementStart) {
-            items += STATEMENT_KEYWORDS.map { CompletionItem(it, SymbolKind.KEYWORD) }
+            val keywords = if (isTopLevel) {
+                // At top level we still allow control flow if it's a scripting language,
+                // but we should prioritize definitions.
+                STATEMENT_KEYWORDS 
+            } else {
+                STATEMENT_KEYWORDS
+            }
+            items += keywords.map { CompletionItem(it, SymbolKind.KEYWORD) }
+            
             if (inFunction) items += CompletionItem("رد", SymbolKind.KEYWORD)
             if (inLoop) {
                 items += CompletionItem("اكفف", SymbolKind.KEYWORD)
@@ -360,14 +379,25 @@ object CompletionEngine {
             if (previousCodeLine(lines, caretLine)?.trim()?.endsWith("انتهى") == true) {
                 items += CompletionItem("وإلا", SymbolKind.KEYWORD)
             }
+            
+            // Symbols: always suggest visible symbols at statement start.
             items += visibleAt(model, caretLine1).map { it.toItem() }
             items += BUILTIN_FUNCTIONS
         } else {
             // Expression position: values, visible symbols and callables.
-            items += visibleAt(model, caretLine1).map { it.toItem() }
+            val visible = visibleAt(model, caretLine1)
+            items += visible.map { it.toItem() }
             items += BUILTIN_FUNCTIONS
             items += VALUE_CONSTANTS.map { CompletionItem(it, SymbolKind.VALUE, "قيمة") }
             items += CompletionItem("ليس", SymbolKind.KEYWORD)
+            
+            // Type-aware completion for Enums/Structs
+            val expectedType = model.typeAtLocation[Location(caretLine1, col)]
+            if (expectedType != null) {
+                model.structFields[expectedType.lexeme]?.forEach { field ->
+                    items += CompletionItem(field, SymbolKind.FIELD, expectedType.lexeme)
+                }
+            }
         }
         return finish(items, prefix, showOnEmpty = explicit)
     }

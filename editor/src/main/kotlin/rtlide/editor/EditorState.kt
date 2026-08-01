@@ -10,10 +10,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import rtlide.core.document.Document
+import rtlide.editor.analysis.AnalysisPipeline
 import rtlide.lang.SakhrLang
 import rtlide.lang.analysis.Diagnostic
 import rtlide.lang.analysis.Location
 import rtlide.lang.analysis.QuickFix
+import rtlide.lang.analysis.Severity
 import rtlide.lang.highlight.Highlighter
 import rtlide.lang.indent.reformat
 import rtlide.lang.intelligence.CompletionModel
@@ -44,42 +46,48 @@ class EditorTab(
     var activePendingFix by mutableStateOf<Pair<QuickFix, Location>?>(null)
     var activePendingFixLength by mutableStateOf(0)
 
+    private var analysisJob: Job? = null
+
+    fun requestAnalysis(scope: CoroutineScope) {
+        analysisJob?.cancel()
+        analysisJob = scope.launch {
+            delay(500.milliseconds)
+            val text = document.text()
+            val result = IdeServices.analyzer.analyze(text, file)
+            diagnostics = result.diagnostics
+            symbols = result.symbols
+            typeAtLocation = result.typeAtLocation
+            structFields = result.structFields
+            completionModel = result.completion ?: completionModel
+        }
+    }
+
     fun applyQuickFix(fix: QuickFix, location: Location, length: Int) {
-        val replacement = fix.replacement
         val lineIndex = location.line - 1
         if (lineIndex !in document.lines.indices) return
-        
         val lineText = document.lineText(lineIndex)
+        
+        // Try new engine first
+        val actions = IdeServices.codeActionEngine.getActionsForDiagnostic(
+            Diagnostic("", location, Severity.Hint, length, listOf(fix)),
+            lineText
+        )
+        val action = actions.firstOrNull()
+        if (action != null && action.edits.isNotEmpty()) {
+            document.applyEdits(action.edits)
+            return
+        }
+
+        val replacement = fix.label // Was replacement, but label is used in CodeActionEngine for title
+        // Fallback for interactive fixes
         val colIndex = (location.column - 1).coerceIn(0, lineText.length)
         
-        val startCaret = rtlide.core.document.Caret(lineIndex, (colIndex + fix.startColOffset).coerceIn(0, lineText.length))
-        val endLine = (lineIndex + fix.endLineOffset).coerceIn(0, document.lines.size - 1)
-        val endCol = if (fix.endColOffset != null) {
-            val offset: Int = fix.endColOffset!!
-            // If it's the same line, it's relative to start. If multi-line, it's absolute (1-based from analyzer).
-            val baseEndCol = if (fix.endLineOffset == 0) startCaret.col + offset else (offset - 1)
-            baseEndCol.coerceIn(0, document.lineText(endLine).length)
-        } else {
-            (colIndex + length).coerceIn(0, document.lineText(endLine).length)
-        }
-        val endCaret = rtlide.core.document.Caret(endLine, endCol)
-
         when {
-            replacement == "CHANGE_TO_VAR" -> {
-                // Find 'ألزم' before the variable
-                val startOfLine = lineText.substring(0, colIndex)
-                val constIndex = startOfLine.lastIndexOf("ألزم")
-                if (constIndex != -1) {
-                    document.caret = rtlide.core.document.Caret(lineIndex, constIndex + 4)
-                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, constIndex)
-                    document.insert("ليكن")
-                }
-            }
-            replacement == "ADD_INITIALIZER" -> {
+            fix.replacement == "ADD_INITIALIZER" -> {
                 if (quickFixInput == null) {
                     activePendingFix = fix to location
                     activePendingFixLength = length
-                    quickFixInput = "" // Initialize to empty string to keep dialog open
+                    quickFixInput = "" 
                     return
                 }
                 document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceIn(0, lineText.length))
@@ -88,137 +96,21 @@ class EditorTab(
                 activePendingFix = null
                 activePendingFixLength = 0
             }
-            replacement == "ألزم" -> {
-                // Find 'ليكن' before the variable
-                val startOfLine = lineText.substring(0, colIndex)
-                val letIndex = startOfLine.lastIndexOf("ليكن")
-                if (letIndex != -1) {
-                    document.caret = rtlide.core.document.Caret(lineIndex, letIndex + 4)
-                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, letIndex)
-                    document.insert("ألزم")
-                }
-            }
-            replacement.startsWith("ADD_TYPE:") -> {
-                val typeName = replacement.removePrefix("ADD_TYPE:")
-                document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceIn(0, lineText.length))
-                document.insert(": $typeName")
-            }
-            replacement == "REMOVE_TYPE" -> {
-                val afterId = if (colIndex + length < lineText.length) lineText.substring(colIndex + length) else ""
-                val colonIndex = afterId.indexOf(':')
-                if (colonIndex != -1) {
-                    val fromColon = afterId.substring(colonIndex)
-                    var typeEnd = 1 // Skip colon
-                    while (typeEnd < fromColon.length && (fromColon[typeEnd].isLetter() || fromColon[typeEnd].isWhitespace())) {
-                        typeEnd++
-                    }
-                    
-                    document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length + colonIndex + typeEnd).coerceAtMost(lineText.length))
-                    document.selectionAnchor = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceAtMost(lineText.length))
-                    document.insert("")
-                }
-            }
-            replacement.startsWith("ADD_RETURN_TYPE:") -> {
-                val typeName = replacement.removePrefix("ADD_RETURN_TYPE:")
-                // Find ')' after the function name
-                val afterFn = lineText.substring(colIndex)
-                val closingParen = afterFn.indexOf(')')
-                if (closingParen != -1) {
-                    document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1).coerceAtMost(lineText.length))
-                    document.insert(": $typeName")
-                }
-            }
-            replacement == "REMOVE_RETURN_TYPE" -> {
-                // Find ': Type' after ')'
-                val afterFn = lineText.substring(colIndex)
-                val closingParen = afterFn.indexOf(')')
-                if (closingParen != -1) {
-                    val afterParen = afterFn.substring(closingParen + 1)
-                    val colonIndex = afterParen.indexOf(':')
-                    if (colonIndex != -1) {
-                         val fromColon = afterParen.substring(colonIndex)
-                         var typeEnd = 1
-                         while (typeEnd < fromColon.length && (fromColon[typeEnd].isLetter() || fromColon[typeEnd].isWhitespace())) {
-                             typeEnd++
-                         }
-                         document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1 + colonIndex + typeEnd).coerceAtMost(lineText.length))
-                         document.selectionAnchor = rtlide.core.document.Caret(lineIndex, (colIndex + closingParen + 1).coerceAtMost(lineText.length))
-                         document.insert("")
-                    }
-                }
-            }
-            replacement.startsWith("CREATE_VAR:") -> {
-                val varName = replacement.removePrefix("CREATE_VAR:")
-                // Smart search for scope start (nearest "ابدأ" upwards or start of file)
+            fix.replacement.startsWith("CREATE_VAR:") -> {
+                val varName = fix.replacement.removePrefix("CREATE_VAR:")
                 var insertLine = 0
                 var indent = ""
                 for (i in lineIndex downTo 0) {
                     val l = document.lineText(i)
                     if (l.contains("ابدأ")) {
                         insertLine = i + 1
-                        // Heuristic for indentation
                         val match = Regex("^\\s*").find(l)
                         indent = (match?.value ?: "") + "    "
                         break
                     }
                 }
-                
                 document.caret = rtlide.core.document.Caret(insertLine, 0)
                 document.insert("${indent}ليكن $varName\n")
-            }
-            replacement == "SAFE_DELETE_VAR" || replacement == "SAFE_DELETE_FUNCTION" -> {
-                // Perform smart deletion using the provided range
-                document.caret = endCaret
-                document.selectionAnchor = startCaret
-                
-                // If we are deleting a full line (or multiple lines), try to clean up the trailing newline
-                if (startCaret.col == 0 && endCaret.line < document.lines.size - 1) {
-                    val lastLineText = document.lineText(endCaret.line)
-                    val trailingPart = if (endCaret.col < lastLineText.length) lastLineText.substring(endCaret.col) else ""
-                    if (trailingPart.isBlank()) {
-                        document.caret = rtlide.core.document.Caret(endCaret.line + 1, 0)
-                    }
-                }
-                
-                document.insert("")
-            }
-            replacement == "SAFE_DELETE_PARAM" -> {
-                val startParen = lineText.lastIndexOf('(', colIndex)
-                val endParen = lineText.indexOf(')', colIndex)
-                if (startParen != -1 && endParen != -1 && endParen > startParen) {
-                    val unitStart = startCaret.col
-                    val unitEnd = endCaret.col
-                    
-                    if (unitStart > startParen && unitEnd <= endParen && unitEnd >= unitStart) {
-                        var deleteStart = unitStart
-                        var deleteEnd = unitEnd
-                        
-                        val beforeUnit = lineText.substring(startParen + 1, unitStart)
-                        val afterUnit = lineText.substring(unitEnd, endParen)
-                        
-                        if (afterUnit.contains('،')) {
-                            val commaPos = afterUnit.indexOf('،')
-                            deleteEnd = unitEnd + commaPos + 1
-                            while (deleteEnd < endParen && lineText[deleteEnd].isWhitespace()) deleteEnd++
-                        } else if (beforeUnit.contains('،')) {
-                            val commaPos = beforeUnit.lastIndexOf('،')
-                            deleteStart = startParen + 1 + commaPos
-                        } else {
-                            deleteStart = (startParen + 1 + beforeUnit.takeWhile { it.isWhitespace() }.length).coerceAtMost(unitStart)
-                            deleteEnd = (unitEnd + afterUnit.takeLastWhile { it.isWhitespace() }.length).coerceAtLeast(unitEnd)
-                        }
-                        
-                        document.caret = rtlide.core.document.Caret(lineIndex, deleteEnd)
-                        document.selectionAnchor = rtlide.core.document.Caret(lineIndex, deleteStart)
-                        document.insert("")
-                    }
-                }
-            }
-            else -> {
-                // Suggestion replacement
-                document.caret = rtlide.core.document.Caret(lineIndex, (colIndex + length).coerceAtMost(lineText.length))
-                document.selectionAnchor = rtlide.core.document.Caret(lineIndex, colIndex)
-                document.insert(replacement)
             }
         }
     }
@@ -309,6 +201,8 @@ class EditorState(private val scope: CoroutineScope? = null) {
         val newTab = EditorTab(file, doc, lang, highlighter)
         tabs.add(newTab)
         activeTabIndex = tabs.size - 1
+
+        scope?.let { AnalysisPipeline.attach(newTab, it) }
     }
 
     fun closeTab(index: Int) {
